@@ -38,7 +38,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -341,6 +341,7 @@ class Bridge:
         self.sid: str | None = None
         self.init_params: dict | None = None
         self.out_lock, self.conn_lock = threading.Lock(), threading.Lock()
+        self.init_done = threading.Event()      # non-init messages wait for the session id
 
     def emit(self, obj: dict) -> None:
         with self.out_lock:
@@ -415,6 +416,8 @@ class Bridge:
         is_init = msg.get("method") == "initialize"
         if is_init:
             self.init_params = msg.get("params") or {}
+        elif self.sid is None:
+            self.init_done.wait(60)              # a client may pipeline messages right after initialize
         for attempt in range(3):
             try:
                 status, headers, msgs = self.post(msg)
@@ -423,6 +426,7 @@ class Bridge:
                 if status in (200, 202):
                     if is_init and status == 200:
                         self.sid = headers.get("mcp-session-id")
+                        self.init_done.set()
                     for m in msgs:
                         self.emit(m)
                     return
