@@ -38,7 +38,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -163,7 +163,7 @@ def start_mac(spec: dict) -> None:
     logp = state_dir(name) / "gateway.log"
     argv = gateway_argv(spec)
     xml = "".join(f"<string>{a}</string>" for a in argv)
-    path_env = os.pathsep.join(dict.fromkeys([str(venv_python().parent), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] + os.environ.get("PATH", "").split(os.pathsep)))
+    path_env = spec.get("path") or os.environ.get("PATH", "/usr/bin:/bin")   # the session's PATH, venv NOT prepended
     plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -488,8 +488,10 @@ def run_gateway(spec_path: str) -> int:
 
     async def serve_once() -> None:
         child_info["restarts"] += 1
-        params = StdioServerParameters(command=spec["command"][0], args=spec["command"][1:],
-                                       env={**os.environ, **spec.get("env", {})}, cwd=spec.get("cwd") or None)
+        child_env = {**os.environ, **spec.get("env", {})}
+        if spec.get("path"):
+            child_env["PATH"] = spec["path"]
+        params = StdioServerParameters(command=spec["command"][0], args=spec["command"][1:], env=child_env, cwd=spec.get("cwd") or None)
         async with stdio_client(params, errlog=sys.stderr) as (read, write):
             async with ClientSession(read, write) as up:
                 init = await up.initialize()
@@ -607,7 +609,10 @@ def parse(argv: list[str]) -> tuple[str, dict, list[str]]:
 
 def build_spec(opts: dict, command: list[str]) -> dict:
     name = opts.get("name") or Path(command[-1]).stem
-    return {"name": name, "command": command, "cwd": opts.get("cwd") or os.getcwd(),
+    # Resolve the executable NOW, with the session's PATH: the gateway runs under a
+    # service manager whose PATH differs, and its own venv must never shadow `python3`.
+    resolved = shutil.which(command[0]) or command[0]
+    return {"name": name, "command": [resolved, *command[1:]], "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
             "env": {k: os.environ[k] for k in opts.get("env", []) if k in os.environ},
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
 
