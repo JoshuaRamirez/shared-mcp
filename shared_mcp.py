@@ -38,7 +38,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -315,6 +315,11 @@ def ensure(spec: dict, wait: float = 60) -> dict:
     same = current and current.get("command") == spec["command"] and current.get("env") == spec["env"] and current.get("launcher") == spec["launcher"]
     if running and same:
         return running
+    if running and not spec.get("resolved", True):
+        # This session's PATH cannot even find the executable; a healthy gateway started by a
+        # better-equipped session must not be replaced by a definition that cannot run.
+        log(f"gateway '{name}' is healthy; keeping it (this session cannot resolve {spec['command'][0]!r})")
+        return running
     if running and not same:
         log(f"gateway '{name}' runs an older definition; restarting with the current one")
     else:
@@ -548,11 +553,14 @@ def run_gateway(spec_path: str) -> int:
                 log(f"gateway '{name}' serving {init.serverInfo.name} on http://127.0.0.1:{port}/mcp (child restarts: {child_info['restarts']})")
 
                 async def watchdog() -> None:
+                    from mcp.shared.exceptions import McpError
                     while not server.should_exit:
                         await anyio.sleep(15)
                         try:
                             with anyio.fail_after(10):
                                 await up.send_ping()
+                        except McpError:
+                            pass                # an error REPLY means the child is alive (some servers reject ping)
                         except Exception as e:  # noqa: BLE001
                             log(f"child server stopped answering ({type(e).__name__}); restarting it")
                             server.should_exit = True
@@ -616,7 +624,8 @@ def build_spec(opts: dict, command: list[str]) -> dict:
     # Resolve the executable NOW, with the session's PATH: the gateway runs under a
     # service manager whose PATH differs, and its own venv must never shadow `python3`.
     resolved = shutil.which(command[0]) or command[0]
-    return {"name": name, "command": [resolved, *command[1:]], "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
+    return {"name": name, "command": [resolved, *command[1:]], "resolved": bool(shutil.which(command[0])),
+            "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
             "env": {k: os.environ[k] for k in opts.get("env", []) if k in os.environ},
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
 
