@@ -41,9 +41,9 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--rule);font:13
 <div class="grp">The artifacts</div><ol><li><a href="#a1">5 · The files</a></li><li><a href="#a2">6 · The crash fix</a></li><li><a href="#a3">7 · spec-vault's own daemon</a></li><li><a href="#a4">8 · The shared-mcp kit</a></li><li><a href="#a5">9 · The svc console</a></li></ol>
 <div class="grp">Operating</div><ol><li><a href="#a6">10 · Machine state &amp; undo</a></li><li><a href="#a7">11 · Edge cases</a></li><li><a href="#a8">12 · Day to day</a></li></ol>
 <div class="grp">Evidence</div><ol><li><a href="#a9">13 · Live evidence</a></li><li><a href="#s6">14 · Open questions</a></li><li><a href="#sref">R · Commands, paths, commits</a></li></ol></nav>
-<main><div class="wrap"><header class="doc"><div class="kicker">Personal infrastructure · reading room</div><h1>Shared MCP: one server per machine, shared by every Claude Code session</h1><p class="lede">The argument, the artifacts, how to operate them, and live evidence — in one page. How Claude Code's per-session MCP servers became shared, supervised, self-registering services; the crash that started it; the kit that makes sharing a plugin's default while staying safe on any machine; the console that keeps the daemons visible; and what remains open.</p><div class="meta"><span><b>Generated:</b> 2026-09-15 19:37 MST</span><span><b>Kit:</b> <a href='https://github.com/JoshuaRamirez/shared-mcp'>github.com/JoshuaRamirez/shared-mcp</a></span><span><b>Console:</b> <code>~/.local/share/svc</code></span></div></header>
+<main><div class="wrap"><header class="doc"><div class="kicker">Personal infrastructure · reading room</div><h1>Shared MCP: one server per machine, shared by every Claude Code session</h1><p class="lede">The argument, the artifacts, how to operate them, and live evidence — in one page. How Claude Code's per-session MCP servers became shared, supervised, self-registering services; the crash that started it; the kit that makes sharing a plugin's default while staying safe on any machine; the console that keeps the daemons visible; and what remains open.</p><div class="meta"><span><b>Generated:</b> 2026-09-15 21:16 MST</span><span><b>Kit:</b> <a href='https://github.com/JoshuaRamirez/shared-mcp'>github.com/JoshuaRamirez/shared-mcp</a></span><span><b>Console:</b> <code>~/.local/share/svc</code></span></div></header>
 <section id="s0"><h2><span class="num">0</span>How to read this</h2><p class="role">Front matter</p>
-<p>This is the single room for the shared-MCP work: the argument (§1–4: why one server per machine, seen from every concern), the artifacts (§5–9: each file and how it works inside), operating it (§10–12: machine state, undo, edge cases, day to day), and live evidence (§13). Everything marked <em>derived</em> was read from this machine when the page was generated (2026-09-15 19:37 MST); the page regenerates on every commit to the kit and daily at 03:35, so it cannot describe a machine that no longer exists.</p>
+<p>This is the single room for the shared-MCP work: the argument (§1–4: why one server per machine, seen from every concern), the artifacts (§5–9: each file and how it works inside), operating it (§10–12: machine state, undo, edge cases, day to day), and live evidence (§13). Everything marked <em>derived</em> was read from this machine when the page was generated (2026-09-15 21:16 MST); the page regenerates on every commit to the kit and daily at 03:35, so it cannot describe a machine that no longer exists.</p>
 <p>The argument half combines the concerns raised while building this — distributed, user, experience, technical, infrastructural, functional, feature, exceptional, ecosystem, development, networking — into one account rather than eleven. The artifact half is the inventory that account rests on.</p>
 <p><b>Nouns used throughout.</b> An <b>MCP server</b> is a program that exposes tools to Claude over the Model Context Protocol. <b>stdio</b> means Claude talks to it through the process's own input and output pipes, which is one-to-one. A <b>gateway</b> is the process that runs one original server and serves it to many clients over HTTP on the loopback interface. A <b>bridge</b> is the small per-session program that speaks stdio to Claude and HTTP to a gateway. <b>launchd</b> is macOS's service manager. <b>svc</b> is the console built for this that lists and manages everything launchd runs for you; a <b>descriptor</b> is the small JSON file that tells svc what launchd cannot know about a service.</p></section><figure><div class="cap"><span class="fno">FIG 1</span><span class="ft">Repositories, machine state, and the arrows between them. Everything under the bottom band was created by the artifacts above it and can be removed with the commands in §6.</span></div><div class="svgbox"><svg viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui" font-size="12.5">
 <defs><marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3a4d5c"/></marker></defs>
@@ -236,7 +236,7 @@ com.spec-vault.graph-server.json</pre>
 <li><b>New plugin with an MCP server:</b> <code>vendor.sh &lt;plugin-dir&gt;</code>, point its <code>.mcp.json</code> at <code>connect</code>, declare forwarded env with <code>--env</code>, add the README disclosure paragraph. Do not share a server that depends on the session's working directory or attaches to a per-session resource.</li>
 <li><b>New background job of any kind:</b> <code>svc register &lt;label&gt; --go</code> and fill in purpose; give it a health probe.</li>
 </ol></section><section id="a9"><h2><span class="num">13</span>Live evidence</h2><p class="role">Produced when this page was generated</p>
-<p><b>15</b> Claude processes running; MCP-related processes: <b>110</b>, holding <b>3865 MB</b> (130 processes / 5.8 GB before the conversion).</p>
+<p><b>14</b> Claude processes running; MCP-related processes: <b>109</b>, holding <b>3823 MB</b> (130 processes / 5.8 GB before the conversion).</p>
 <table><thead><tr><th>gateway</th><th>state</th><th>port</th><th>health</th><th>bridges</th><th>purpose</th></tr></thead><tbody><tr><td><code>mcp-ado-backlog-sync</code></td><td>running</td><td>48379</td><td class='ok'>ok</td><td>11</td><td>shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MCP server: runs `/opt/homebrew/bin/python3 /Users/joshua/Develo</td></tr>
 <tr><td><code>mcp-advanced-prompting-engine</code></td><td>running</td><td>48410</td><td class='ok'>ok</td><td>14</td><td>shared-mcp gateway for the &#x27;advanced-prompting-engine&#x27; MCP server: runs `/opt/homebrew/bin/python3 -m advanced</td></tr>
 <tr><td><code>mcp-efforts</code></td><td>running</td><td>48793</td><td class='ok'>ok</td><td>15</td><td>shared-mcp gateway for the &#x27;efforts&#x27; MCP server: runs `/Users/joshua/.nvm/versions/node/v24.18.0/bin/node /Use</td></tr>
@@ -247,18 +247,18 @@ com.spec-vault.graph-server.json</pre>
 <p class="small">Derived live from svc and the process table. Health verdicts come from a live probe of each gateway's <code>/health</code> (or <code>/mcp</code> for spec-vault); "bridges" counts per-session bridge processes currently attached.</p>
 <h3>shared-mcp end-to-end test</h3><pre>first bridge initialised in 5.9s (cold gateway)
 ok   server name via bridge = fixture
-    1 pid=37938 token=secret-xyz | 2 pid=37938 token=secret-xyz | 3 pid=37938 token=secret-xyz
+    1 pid=44742 token=secret-xyz | 2 pid=44742 token=secret-xyz | 3 pid=44742 token=secret-xyz
 ok   counter continues across two bridges =&gt; ONE shared server process
 ok   declared env var forwarded to the shared server
 ok   same child pid for all calls
     bridge RSS: 29 MB / 29 MB
 ok   tools/list forwarded
 ok   resources/read forwarded through the gateway: {&#x27;jsonrpc&#x27;: &#x27;2.0&#x27;, &#x27;id&#x27;: 16, &#x27;result&#x27;: {&#x27;contents&#x27;: [{&#x27;uri&#x27;: &#x27;fixture://hello&#x27;, &#x27;mimeType&#x27;
-    after gateway kill: 1 pid=40963 token=secret-xyz (4.1s)
+    after gateway kill: 1 pid=47234 token=secret-xyz (4.1s)
 ok   bridge reconnected to the restarted gateway (counter reset =&gt; new child) and replayed the call
 ok   second bridge also reconnected
 ok   bridges exit 0 on stdin EOF
-    after in-place edit: 1 pid=44530 token=secret-xyz
+    after in-place edit: 1 pid=51032 token=secret-xyz
 ok   in-place edit of the server file =&gt; gateway restarted (counter reset) although the command path was unchanged
 ok   svc descriptor written
 ok   status reports running
@@ -274,6 +274,9 @@ ok   holder released its lock
 ok   stale (10 min) lock is claimed by rename and re-taken
 ok   spec keeps declared command, records resolved exe separately, honours --port
 ok   free_port_near raises when 20 consecutive ports are busy
+ok   tools/call + mid-request timeout: posted once, one explicit error, no replay
+ok   tools/list + mid-request timeout: retried to 3 attempts, then one error
+ok   tools/call + connection refused (pre-dispatch): retried 3x, then &#x27;unreachable&#x27; error
 ALL PASSED</pre><h3>shared-mcp detached-supervision path (Linux-without-systemd / Windows branch, forced on this Mac)</h3><pre>ok   detached gateway came up via pid file in 0.8s
 ok   pid file written and service_alive() sees the process
 ok   no launchd plist was created on this path
@@ -298,19 +301,19 @@ ok   launchctl lc_notrunning: {&#x27;state&#x27;: &#x27;not running&#x27;, &#x27
 selftest: all passed</pre>
 <h3>svc list</h3><pre>NAME                           KIND      STATE        PID    PORTS  HEALTH  LOG    SCHEDULE                       PURPOSE
 openclaw-gateway               service   running      30071  18789  ok      5K     keepalive                      OpenClaw gateway — the `openclaw` npm package (n
-autobets-collector             service   running      1507   -      ok      413K   keepalive:SuccessfulExit       AutoBets news collector: polls the feeds every 6
+autobets-collector             service   running      1507   -      ok      415K   keepalive:SuccessfulExit       AutoBets news collector: polls the feeds every 6
 autobets-paper                 service   not running  -      -      ok      12M    keepalive:SuccessfulExit       AutoBets paper-trading node (run_paper.py): runs
 icloud-mcp                     service   running      54537  7801   ok      blind  keepalive                      Shared iCloud MCP HTTP daemon: one server for al
-icloud-sync                    periodic  running      25634  -      ok      blind  every 10m                      Headless iCloud mirror sync + mechanical rule au
+icloud-sync                    periodic  not running  -      -      ok      blind  every 10m                      Headless iCloud mirror sync + mechanical rule au
 ado-dash                       periodic  not running  -      -      ok      21K    at 04:45, 05:45, 16:45, 17:45  Rebuilds the AspenESS commit dashboard (fetch AD
 shared-mcp-room                periodic  not running  -      -      ok      114B   at 03:35                       Daily at 03:35: regenerates the shared-MCP readi
 svc-prune                      periodic  not running  -      -      ok      21B    at 03:30                       Daily at 03:30: bounds every owned service&#x27;s log
-mcp-ado-backlog-sync           service   running      37834  48379  ok      942K   keepalive                      shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MC
-mcp-advanced-prompting-engine  service   running      40006  48410  ok      4M     keepalive                      shared-mcp gateway for the &#x27;advanced-prompting-e
-mcp-efforts                    service   running      50019  48793  ok      1M     keepalive                      shared-mcp gateway for the &#x27;efforts&#x27; MCP server:
-mcp-graphology                 service   running      47474  48103  ok      5K     keepalive                      shared-mcp gateway for the &#x27;graphology&#x27; MCP serv
-mcp-projam                     service   running      44708  48533  ok      1K     keepalive                      shared-mcp gateway for the &#x27;projam&#x27; MCP server:
-mcp-prompt-library             service   running      42439  47943  ok      2K     keepalive                      shared-mcp gateway for the &#x27;prompt-library&#x27; MCP
+mcp-ado-backlog-sync           service   running      59888  48379  ok      942K   keepalive                      shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MC
+mcp-advanced-prompting-engine  service   running      64227  48410  ok      4M     keepalive                      shared-mcp gateway for the &#x27;advanced-prompting-e
+mcp-efforts                    service   running      79341  48793  ok      1M     keepalive                      shared-mcp gateway for the &#x27;efforts&#x27; MCP server:
+mcp-graphology                 service   running      75249  48103  ok      5K     keepalive                      shared-mcp gateway for the &#x27;graphology&#x27; MCP serv
+mcp-projam                     service   running      71868  48533  ok      1K     keepalive                      shared-mcp gateway for the &#x27;projam&#x27; MCP server:
+mcp-prompt-library             service   running      68760  47943  ok      2K     keepalive                      shared-mcp gateway for the &#x27;prompt-library&#x27; MCP
 spec-vault-graph               service   running      42734  47765  ok      5M     keepalive                      spec-vault plugin&#x27;s shared MCP graph server (Lad
 
 (9 vendor/brew agents hidden; --all to show)</pre>
@@ -338,7 +341,8 @@ spec-vault-graph               service   running      42734  47765  ok      5M  
 <tr><td><code>~/.local/state/spec-vault/</code> · <code>~/.local/state/svc/</code></td><td>spec-vault venv, log, running-version; svc prune log</td></tr>
 <tr><td><code>~/Library/LaunchAgents/com.shared-mcp.*.plist</code>, <code>com.spec-vault.graph-server.plist</code>, <code>com.joshua.svc-prune.plist</code>, <code>com.joshua.shared-mcp-room.plist</code></td><td>the agents</td></tr>
 </tbody></table>
-<h3>Commits since 2026-09-13, per repository</h3><h4>shared-mcp (public)</h4><pre>67d62d3 2026-09-15 test: detached-supervision path (forced off launchd); room and README record it
+<h3>Commits since 2026-09-13, per repository</h3><h4>shared-mcp (public)</h4><pre>a3121d6 2026-09-15 0.3.1: second-review fixes — ReadResourceContents import (+ e2e resources/read test), no blind replay of side-effecting calls, watchdog probes a stalled child, reconnect revives newest on-disk spec, pid identity check, serialize/cwd in identity, --cwd on fallback, adopt surviving gateway on bootstrap failure, surface bind failure, atexit lock release, unique derived names
+67d62d3 2026-09-15 test: detached-supervision path (forced off launchd); room and README record it
 1afb42f 2026-09-15 reading room: one merged room (argument + artifacts + operating + evidence); pre-commit hook and daily agent keep it current; redirect stub for the old page
 76d7b3f 2026-09-15 reading room: review-driven hardening
 4eb01b2 2026-09-15 0.3.0: hardening from review — live port in bridge, non-raising reconnect, init release on failure, lock with heartbeat/atomic stale claim/no foreign rmdir, global venv lock, restart_ok=False for reconnecting bridges (no downgrade), wait for a starting service, declared-command identity, explicit --port, scoped label/port under SHARED_MCP_STATE, strict owner, XML/shlex escaping, streaming log rotate, blob resources, guarded upstream calls (serialize all; watchdog quiet while busy, 2 misses), backoff order, fallback covers build_spec, ensure checks launcher exists; unit tests
@@ -358,7 +362,8 @@ a73c65f 2026-09-14 0.1.2: pipelined messages wait for the initialize session id 
 d816551 2026-09-14 shared-mcp 0.1.0: share one stdio MCP server per machine — stdlib bridge, mcp gateway, launchd/systemd/detached supervision, fallback to plain stdio, e2e test</pre><h4>svc</h4><pre>4c66f12 2026-09-15 doctor: flag services whose argument paths vanished (orphaned gateways after plugin removal)
 57bcfcd 2026-09-15 prune: dedupe shared log directories; daily agent
 84da617 2026-09-14 doctor: flag log directories piling up (count or total size)
-3f51cf3 2026-09-14 svc v0.1: derived inventory of launchd agents, health, doctor, verified control, fixtures</pre><h4>ClaudeCodeMarketplace</h4><pre>02187c2 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
+3f51cf3 2026-09-14 svc v0.1: derived inventory of launchd agents, health, doctor, verified control, fixtures</pre><h4>ClaudeCodeMarketplace</h4><pre>9cc9243 2026-09-15 ⬆️ chore: shared-mcp 0.3.1 (second review: 11 fixes)
+02187c2 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
 c0ec481 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
 8ed9314 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 ef4891b 2026-09-15 🐛 fix(spec-vault): restart the shared daemon when the plugin version or server.py changes in place (directory-source marketplaces keep the same path)
@@ -375,7 +380,8 @@ f10b977 2026-09-14 🔧 chore(spec-vault): daemon self-registers with svc, rotat
 ed33b50 2026-09-13 🔧 chore(spec-vault): point plugin at the shared HTTP daemon, bump to 0.12.0
 f8f883e 2026-09-13 ✨ feat(spec-vault): HTTP transport + launchd agent so one graph daemon serves every session
 b1980f7 2026-09-13 🐛 fix(spec-vault): exit via os._exit on SIGTERM so the graph server stops aborting at Claude quit
-abcc9cf 2026-09-15 🔎 feat(efforts-status): the evidence sweep behind the Efforts wiki, as a plugin (v1.0.0)</pre><h4>advanced-prompting-engine</h4><pre>60ae1d3 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
+abcc9cf 2026-09-15 🔎 feat(efforts-status): the evidence sweep behind the Efforts wiki, as a plugin (v1.0.0)</pre><h4>advanced-prompting-engine</h4><pre>c8f1e45 2026-09-15 ⬆️ chore: shared-mcp 0.3.1 (second review: 11 fixes)
+60ae1d3 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
 20b71ae 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
 4133dc6 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 b396f91 2026-09-15 📝 docs: link the published shared-mcp kit
@@ -383,7 +389,8 @@ b396f91 2026-09-15 📝 docs: link the published shared-mcp kit
 6380153 2026-09-15 ⬆️ chore: shared-mcp 0.1.3
 ada0af0 2026-09-14 ⬆️ chore: shared-mcp 0.1.2
 9ff8fe4 2026-09-14 ⬆️ chore: shared-mcp 0.1.1 (PATH/executable resolution fix)
-ff13e21 2026-09-14 ✨ feat(plugin): share one MCP server per machine via vendored shared-mcp launcher (falls back to plain stdio)</pre><h4>claude-code-profile (prompt-library)</h4><pre>28eee29 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
+ff13e21 2026-09-14 ✨ feat(plugin): share one MCP server per machine via vendored shared-mcp launcher (falls back to plain stdio)</pre><h4>claude-code-profile (prompt-library)</h4><pre>1cf0959 2026-09-15 ⬆️ chore: shared-mcp 0.3.1 (second review: 11 fixes)
+28eee29 2026-09-15 ⬆️ chore: shared-mcp 0.3.0 (hardening from code review: 23 findings)
 de9837a 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
 90e3b3f 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 ca63c46 2026-09-15 📝 docs: link the published shared-mcp kit

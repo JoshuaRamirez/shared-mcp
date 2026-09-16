@@ -51,4 +51,23 @@ try:
     except RuntimeError: check(True, "free_port_near raises when 20 consecutive ports are busy")
 finally:
     for s_ in srvs: s_.close()
+
+# --- 7. replay policy: a mid-request failure on a side-effecting call is reported once, never replayed;
+#        the same failure on an idempotent call is retried; a pre-dispatch refusal is retried for both
+import socket
+k.wait_ok = lambda port, name, seconds: None; k.gateway_ok = lambda port, name: None; k.service_alive = lambda name: False
+def mk(exc):
+    b2 = k.Bridge({"name": "unit", "port": 1, "command": ["x"], "env": {}, "launcher": __file__}); calls = {"n": 0}
+    def post(msg): calls["n"] += 1; raise exc
+    b2.post = post; b2.reconnect = lambda: None; got = []; b2.emit = got.append
+    return b2, calls, got
+b2, calls, got = mk(socket.timeout("timed out"))
+b2.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "t", "arguments": {}}})
+check(calls["n"] == 1 and len(got) == 1 and "not replayed" in got[0]["error"]["message"], "tools/call + mid-request timeout: posted once, one explicit error, no replay")
+b2, calls, got = mk(socket.timeout("timed out"))
+b2.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+check(calls["n"] == 3 and len(got) == 1, "tools/list + mid-request timeout: retried to 3 attempts, then one error")
+b2, calls, got = mk(ConnectionRefusedError("refused"))
+b2.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "t", "arguments": {}}})
+check(calls["n"] == 3 and len(got) == 1 and "unreachable" in got[0]["error"]["message"], "tools/call + connection refused (pre-dispatch): retried 3x, then 'unreachable' error")
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
