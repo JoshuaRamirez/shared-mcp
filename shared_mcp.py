@@ -29,11 +29,15 @@ Registers with `svc` (~/.config/svc/services.d) when that console exists.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import html as _html
 import http.client
 import json
+import shlex
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -42,7 +46,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.2.2"
+VERSION = "0.3.0"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -72,7 +76,7 @@ def owner_tag() -> str:
 
 
 def stable_port(name: str) -> int:
-    return 47800 + zlib.crc32(f"{owner_tag()}:{name}".encode()) % 1000
+    return 47800 + zlib.crc32(f"{owner_tag()}:{name}{_SCOPE}".encode()) % 1000
 
 
 def free_port_near(port: int, name: str) -> int:
@@ -85,7 +89,7 @@ def free_port_near(port: int, name: str) -> int:
             sock.settimeout(0.3)
             if sock.connect_ex(("127.0.0.1", candidate)) != 0:
                 return candidate
-    return port
+    raise RuntimeError(f"no free loopback port near {port}")
 
 
 def load_spec(name: str) -> dict | None:
@@ -129,7 +133,7 @@ def health(port: int, timeout: float = 1.5) -> dict | None:
 
 def gateway_ok(port: int, name: str) -> dict | None:
     h = health(port)
-    return h if h and h.get("name") == name and str(h.get("owner", owner_tag())) == owner_tag() else None
+    return h if h and h.get("name") == name and str(h.get("owner")) == owner_tag() else None
 
 
 def wait_ok(port: int, name: str, seconds: float) -> dict | None:
@@ -148,6 +152,14 @@ def ensure_venv() -> Path:
     stamp = VENV / ".requirement"
     if py.exists() and stamp.exists() and stamp.read_text().strip() == MCP_REQUIREMENT:
         return py
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    with _Lock(STATE_ROOT / "venv.lock"):            # the venv is machine-wide: one builder at a time across names
+        if py.exists() and stamp.exists() and stamp.read_text().strip() == MCP_REQUIREMENT:
+            return py
+        return _build_venv(py, stamp)
+
+
+def _build_venv(py: Path, stamp: Path) -> Path:
     log(f"building gateway environment in {VENV} ({MCP_REQUIREMENT})")
     shutil.rmtree(VENV, ignore_errors=True)
     uv = shutil.which("uv")
@@ -162,8 +174,11 @@ def ensure_venv() -> Path:
 
 
 # ----------------------------------------------------------------- supervision
+_SCOPE = "" if str(STATE_ROOT) == str(HOME / ".local" / "state" / "shared-mcp") else "." + hashlib.sha256(str(STATE_ROOT).encode()).hexdigest()[:6]
+
+
 def label(name: str) -> str:
-    return f"com.shared-mcp.{name}"
+    return f"com.shared-mcp.{name}{_SCOPE}"
 
 
 def gateway_argv(spec: dict) -> list[str]:
@@ -187,14 +202,14 @@ def start_mac(spec: dict) -> None:
         time.sleep(0.25)
     logp = state_dir(name) / "gateway.log"
     argv = gateway_argv(spec)
-    xml = "".join(f"<string>{a}</string>" for a in argv)
+    xml = "".join(f"<string>{_html.escape(a, quote=False)}</string>" for a in argv)
     path_env = spec.get("path") or os.environ.get("PATH", "/usr/bin:/bin")   # the session's PATH, venv NOT prepended
     plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>{lab}</string>
   <key>ProgramArguments</key><array>{xml}</array>
-  <key>WorkingDirectory</key><string>{spec.get("cwd") or str(HOME)}</string>
+  <key>WorkingDirectory</key><string>{_html.escape(spec.get("cwd") or str(HOME), quote=False)}</string>
   <key>ProcessType</key><string>Interactive</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -202,8 +217,8 @@ def start_mac(spec: dict) -> None:
   <key>StandardOutPath</key><string>{logp}</string>
   <key>StandardErrorPath</key><string>{logp}</string>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>{path_env}</string>
-    <key>HOME</key><string>{HOME}</string>
+    <key>PATH</key><string>{_html.escape(path_env, quote=False)}</string>
+    <key>HOME</key><string>{_html.escape(str(HOME), quote=False)}</string>
   </dict>
 </dict></plist>
 """)
@@ -234,7 +249,7 @@ def start_systemd(spec: dict) -> None:
     unit.write_text(f"""[Unit]
 Description=shared-mcp gateway: {spec['name']}
 [Service]
-ExecStart={' '.join(gateway_argv(spec))}
+ExecStart={' '.join(shlex.quote(a) for a in gateway_argv(spec))}
 WorkingDirectory={spec.get('cwd') or HOME}
 Restart=always
 RestartSec=3
@@ -280,6 +295,22 @@ def stop_detached(name: str) -> None:
     pidf.unlink(missing_ok=True)
 
 
+def service_alive(name: str) -> bool:
+    """Is a gateway process registered and alive (even if not yet answering)? Used to wait
+    for a starting gateway instead of tearing it down and starting again."""
+    try:
+        if IS_MAC:
+            rc, out = _launchctl("print", f"gui/{os.getuid()}/{label(name)}")
+            return rc == 0 and re.search(r"^\s*pid = \d+", out, re.M) is not None
+        if not IS_WIN and _systemd_user_available():
+            return subprocess.run(["systemctl", "--user", "is-active", "--quiet", f"shared-mcp-{name}.service"]).returncode == 0
+        pid = int((state_dir(name) / "gateway.pid").read_text())
+        os.kill(pid, 0)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def start_gateway(spec: dict) -> None:
     if IS_MAC:
         start_mac(spec)
@@ -309,7 +340,7 @@ def write_svc_descriptor(spec: dict) -> None:
     d = HOME / ".config" / "svc" / "services.d"
     if not d.is_dir():
         return
-    me = f"{sys.executable} {Path(spec['launcher']).resolve()}"
+    me = f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(spec['launcher']).resolve()))}"
     (d / f"{label(spec['name'])}.json").write_text(json.dumps({
         "label": label(spec["name"]), "name": f"mcp-{spec['name']}",
         "purpose": f"shared-mcp gateway for the '{spec['name']}' MCP server: runs `{' '.join(spec['command'])}` once and serves it to every Claude session over HTTP.",
@@ -326,38 +357,52 @@ def rotate_log(name: str) -> None:
     logp = state_dir(name) / "gateway.log"
     try:
         if logp.stat().st_size > 5_000_000:
-            lines = logp.read_bytes().splitlines()[-2000:]
-            logp.write_bytes(b"\n".join(lines) + b"\n")
+            with open(logp, "rb") as fh:
+                fh.seek(-2_000_000, os.SEEK_END)
+                tail = fh.read().split(b"\n", 1)[-1]
+            logp.write_bytes(tail)
     except OSError:
         pass
 
 
 class _Lock:
-    """mkdir lock so sessions restored in a batch do not race the bootstrap."""
-    def __init__(self, name: str):
-        self.path = state_dir(name) / "ensure.lock"
+    """mkdir lock so sessions restored in a batch do not race the bootstrap.
+    Holders refresh the mtime between long steps (touch()); a lock idle for 10 minutes is
+    stale and is claimed atomically by rename. A waiter that gives up proceeds WITHOUT the
+    lock and never removes someone else's."""
+    def __init__(self, path: Path, wait_s: float = 300):
+        self.path, self.wait_s, self.held = path, wait_s, False
+    def touch(self):
+        if self.held:
+            try: os.utime(self.path)
+            except OSError: pass
     def __enter__(self):
-        for _ in range(240):
+        deadline = time.time() + self.wait_s
+        while time.time() < deadline:
             try:
-                self.path.mkdir(); return self
+                self.path.mkdir(); self.held = True; return self
             except FileExistsError:
                 try:
-                    if time.time() - self.path.stat().st_mtime > 90:
-                        self.path.rmdir(); continue
+                    if time.time() - self.path.stat().st_mtime > 600:
+                        stale = self.path.with_name(f"{self.path.name}.stale.{os.getpid()}")
+                        os.rename(self.path, stale)      # atomic: exactly one waiter wins the claim
+                        stale.rmdir(); continue
                 except OSError:
                     pass
                 time.sleep(0.25)
-        return self                            # give up waiting; proceed rather than hang forever
+        log(f"could not take {self.path.name} within {self.wait_s:.0f}s; proceeding unlocked")
+        return self
     def __exit__(self, *a):
-        try: self.path.rmdir()
-        except OSError: pass
+        if self.held:
+            try: self.path.rmdir()
+            except OSError: pass
 
 
 def _flapping(name: str, spec: dict) -> bool:
     """True if this exact definition was replaced by another within the last 10 minutes —
     two sessions declaring different env/commands would otherwise restart the gateway forever."""
     hist_p = state_dir(name) / "spec-history.json"
-    key = json.dumps([spec["command"], spec["env"], spec.get("fingerprint")], sort_keys=True)
+    key = json.dumps([spec["command"], spec["env"], spec.get("fingerprint"), spec.get("launcher")], sort_keys=True)
     try:
         hist = json.loads(hist_p.read_text())
     except Exception:  # noqa: BLE001
@@ -370,18 +415,24 @@ def _flapping(name: str, spec: dict) -> bool:
     return seen_recently
 
 
-def ensure(spec: dict, wait: float = 60) -> dict:
-    with _Lock(spec["name"]):
-        return _ensure_locked(spec, wait)
+def ensure(spec: dict, wait: float = 60, restart_ok: bool = True) -> dict:
+    """restart_ok=False (bridges reconnecting): revive a dead gateway, adopt a live one, never
+    replace a live one — a still-open old session must not downgrade an upgraded gateway."""
+    with _Lock(state_dir(spec["name"]) / "ensure.lock") as lk:
+        return _ensure_locked(spec, wait, restart_ok, lk)
 
 
-def _ensure_locked(spec: dict, wait: float) -> dict:
+def _ensure_locked(spec: dict, wait: float, restart_ok: bool, lk: "_Lock") -> dict:
     """Make the gateway for spec run with THIS spec; returns its health card or raises."""
     name = spec["name"]
     current = load_spec(name)
-    if current and current.get("port"):
+    if current and current.get("port") and not spec.get("port_explicit"):
         spec["port"] = current["port"]                          # keep the port a running gateway already uses
     running = gateway_ok(spec["port"], name)
+    if not running and service_alive(name):
+        # Registered and alive but not answering yet: it is STARTING (child init, or in
+        # restart backoff). Wait for it rather than tearing down a gateway that is coming up.
+        running = wait_ok(spec["port"], name, wait)
     if not running:
         spec["port"] = free_port_near(spec["port"], name)      # hashed port held by a stranger? step forward
     port = spec["port"]
@@ -389,6 +440,8 @@ def _ensure_locked(spec: dict, wait: float) -> dict:
             and current.get("launcher") == spec["launcher"] and current.get("fingerprint") == spec.get("fingerprint"))
     if running and same:
         return running
+    if running and not restart_ok:
+        return running                                          # a live gateway wins over a reconnecting old bridge
     if running and not spec.get("resolved", True):
         # This session's PATH cannot even find the executable; a healthy gateway started by a
         # better-equipped session must not be replaced by a definition that cannot run.
@@ -408,10 +461,10 @@ def _ensure_locked(spec: dict, wait: float) -> dict:
             f"Opt out: SHARED_MCP_DISABLE=1, or `python3 {Path(__file__).name} stop --name {name}`.")
     else:
         log(f"starting gateway '{name}' on 127.0.0.1:{port}")
-    ensure_venv()
+    ensure_venv(); lk.touch()
     rotate_log(name)
     save_spec(spec)
-    start_gateway(spec)
+    start_gateway(spec); lk.touch()
     write_svc_descriptor(spec)
     h = wait_ok(port, name, wait)
     if not h:
@@ -426,12 +479,16 @@ class Bridge:
     the message when the gateway has restarted."""
 
     def __init__(self, spec: dict):
-        self.spec, self.port, self.name = spec, spec["port"], spec["name"]
+        self.spec, self.name = spec, spec["name"]
         self.sid: str | None = None
         self.init_params: dict | None = None
         self.out_lock, self.conn_lock = threading.Lock(), threading.Lock()
         self.init_done = threading.Event()      # set once an initialize round-trip completes
         self.init_inflight = False              # only then do pipelined messages wait for it
+
+    @property
+    def port(self) -> int:                      # live: ensure() may move the gateway's port
+        return self.spec["port"]
 
     def emit(self, obj: dict) -> None:
         with self.out_lock:
@@ -469,8 +526,11 @@ class Bridge:
             else:
                 body = r.read()
                 if body.strip():
-                    parsed = json.loads(body)
-                    msgs.extend(parsed if isinstance(parsed, list) else [parsed])
+                    try:
+                        parsed = json.loads(body)
+                        msgs.extend(parsed if isinstance(parsed, list) else [parsed])
+                    except ValueError:
+                        pass
         else:
             body = r.read()
             if ctype.startswith("application/json") and body.strip():
@@ -483,23 +543,30 @@ class Bridge:
         return r.status, headers, msgs
 
     def reconnect(self) -> None:
+        """Never raises. Revives or waits for the gateway, then re-initializes if the client had."""
         with self.conn_lock:
-            if gateway_ok(self.port, self.name) and self.sid and self._session_alive():
-                return
-            log("gateway connection lost; reconnecting")
-            self.sid = None
-            if not wait_ok(self.port, self.name, 10):
-                try:
-                    ensure(self.spec)
-                except Exception as e:  # noqa: BLE001
-                    log(f"could not revive gateway: {e}")
-                    wait_ok(self.port, self.name, 60)
-            if self.init_params is not None:
-                st, hdrs, _ = self.post({"jsonrpc": "2.0", "id": "shared-mcp-reinit", "method": "initialize", "params": self.init_params})
-                if st == 200:
-                    self.sid = hdrs.get("mcp-session-id")
-                    self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
-                    log("reconnected")
+            try:
+                if gateway_ok(self.port, self.name) and self.sid and self._session_alive():
+                    return
+                log("gateway connection lost; reconnecting")
+                self.sid = None
+                grace = 45 if service_alive(self.name) else 10       # a starting gateway deserves patience
+                if not wait_ok(self.port, self.name, grace):
+                    try:
+                        ensure(self.spec, restart_ok=False)              # revive/adopt only; never replace a live one
+                    except Exception as e:  # noqa: BLE001
+                        log(f"could not revive gateway: {e}")
+                        wait_ok(self.port, self.name, 60)
+                if self.init_params is not None and gateway_ok(self.port, self.name):
+                    st, hdrs, _ = self.post({"jsonrpc": "2.0", "id": "shared-mcp-reinit", "method": "initialize", "params": self.init_params})
+                    if st == 200:
+                        self.sid = hdrs.get("mcp-session-id")
+                        self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                        log("reconnected")
+            except Exception as e:  # noqa: BLE001
+                log(f"reconnect attempt failed: {type(e).__name__}: {e}")
+            finally:
+                self.init_done.set(); self.init_inflight = False     # never leave pipelined messages parked
 
     def _session_alive(self) -> bool:
         try:
@@ -525,11 +592,13 @@ class Bridge:
                 if status in (200, 202):
                     if is_init and status == 200:
                         self.sid = headers.get("mcp-session-id")   # None for a sessionless server
-                        self.init_done.set()
-                        self.init_inflight = False
+                    if is_init:
+                        self.init_done.set(); self.init_inflight = False
                     for m in msgs:
                         self.emit(m)
                     return
+                if is_init:
+                    self.init_done.set(); self.init_inflight = False   # failed handshake must not park later messages
                 jsonrpc = [m for m in msgs if isinstance(m, dict) and m.get("jsonrpc") == "2.0"]
                 if jsonrpc:                       # e.g. a JSON-RPC error carried on a 4xx (2026-07-28 style)
                     for m in jsonrpc:
@@ -537,8 +606,10 @@ class Bridge:
                 elif "id" in msg:
                     self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"gateway returned HTTP {status}"}})
                 return
-            except (ConnectionError, OSError, http.client.HTTPException) as e:
+            except (ConnectionError, OSError, http.client.HTTPException, ValueError) as e:
                 if attempt == 2:
+                    if is_init:
+                        self.init_done.set(); self.init_inflight = False
                     if "id" in msg:
                         self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"shared-mcp gateway unreachable: {e}"}})
                     return
@@ -599,42 +670,59 @@ def run_gateway(spec_path: str) -> int:
         child_env = {**os.environ, **spec.get("env", {})}
         if spec.get("path"):
             child_env["PATH"] = spec["path"]
-        params = StdioServerParameters(command=spec["command"][0], args=spec["command"][1:], env=child_env, cwd=spec.get("cwd") or None)
+        exe = spec.get("resolved_exe") or spec["command"][0]
+        params = StdioServerParameters(command=exe, args=spec["command"][1:], env=child_env, cwd=spec.get("cwd") or None)
         async with stdio_client(params, errlog=sys.stderr) as (read, write):
             async with ClientSession(read, write) as up:
                 init = await up.initialize()
                 srv: Server = Server(init.serverInfo.name, instructions=init.instructions)
                 caps = init.capabilities
+                call_lock = anyio.Lock() if spec.get("serialize") else None
+                inflight = {"n": 0}
+
+                async def guarded(coro):
+                    """Every upstream request goes through here: counts in-flight work (the watchdog
+                    stays quiet while the child is busy) and, with --serialize, one at a time."""
+                    inflight["n"] += 1
+                    try:
+                        if call_lock is None:
+                            return await coro
+                        async with call_lock:
+                            return await coro
+                    finally:
+                        inflight["n"] -= 1
+
                 if caps.tools is not None:
                     @srv.list_tools()
                     async def _lt() -> list[types.Tool]:
-                        return (await up.list_tools()).tools
-
-                    call_lock = anyio.Lock() if spec.get("serialize") else None
+                        return (await guarded(up.list_tools())).tools
 
                     @srv.call_tool(validate_input=False)
                     async def _ct(n: str, a: dict | None) -> types.CallToolResult:
-                        if call_lock is None:
-                            return await up.call_tool(n, a or {})
-                        async with call_lock:               # --serialize: one tool call at a time for single-client servers
-                            return await up.call_tool(n, a or {})
+                        return await guarded(up.call_tool(n, a or {}))
                 if caps.prompts is not None:
                     @srv.list_prompts()
                     async def _lp() -> list[types.Prompt]:
-                        return (await up.list_prompts()).prompts
+                        return (await guarded(up.list_prompts())).prompts
 
                     @srv.get_prompt()
                     async def _gp(n: str, a: dict[str, str] | None) -> types.GetPromptResult:
-                        return await up.get_prompt(n, a)
+                        return await guarded(up.get_prompt(n, a))
                 if caps.resources is not None:
                     @srv.list_resources()
                     async def _lr() -> list[types.Resource]:
-                        return (await up.list_resources()).resources
+                        return (await guarded(up.list_resources())).resources
 
                     @srv.read_resource()
                     async def _rr(uri):
-                        res = await up.read_resource(uri)
-                        return [types.ReadResourceContents(content=getattr(c, "text", None) or getattr(c, "blob", ""), mime_type=c.mimeType) for c in res.contents]
+                        res = await guarded(up.read_resource(uri))
+                        out = []
+                        for c in res.contents:
+                            if isinstance(c, types.BlobResourceContents):
+                                out.append(types.ReadResourceContents(content=base64.b64decode(c.blob), mime_type=c.mimeType))
+                            else:
+                                out.append(types.ReadResourceContents(content=c.text, mime_type=c.mimeType))
+                        return out
 
                 mgr = StreamableHTTPSessionManager(app=srv, stateless=False)
                 try:
@@ -685,26 +773,30 @@ def run_gateway(spec_path: str) -> int:
                     # `ping`; tools/list exists in every generation, and an error reply still
                     # proves the child is alive. Only silence / a broken pipe means dead.
                     from mcp.shared.exceptions import McpError
+                    misses = 0
                     while not server.should_exit:
                         await anyio.sleep(30)
+                        if inflight["n"]:
+                            continue                        # busy child (a long sync tool) is not a dead child
                         try:
-                            with anyio.fail_after(20):
+                            with anyio.fail_after(60):
                                 await up.list_tools()
+                            misses = 0
                         except McpError:
-                            pass
+                            misses = 0
                         except Exception as e:  # noqa: BLE001
-                            log(f"child server stopped answering ({type(e).__name__}); restarting it")
-                            server.should_exit = True
-                            return
+                            misses += 1
+                            if misses >= 2:                 # two consecutive silences (~3 min) before restart
+                                log(f"child server stopped answering ({type(e).__name__}) twice; restarting it")
+                                server.should_exit = True
+                                return
 
                 async with anyio.create_task_group() as tg:
                     tg.start_soon(watchdog)
                     await server.serve()
                     tg.cancel_scope.cancel()
-                if server.should_exit and not _got_signal["v"]:
+                if server.should_exit:
                     raise RuntimeError("child restart requested")
-
-    _got_signal = {"v": False}
 
     async def main() -> None:
         delay = 2.0
@@ -717,9 +809,11 @@ def run_gateway(spec_path: str) -> int:
                 return
             except BaseException as e:  # noqa: BLE001
                 # Backoff: at login the child's dependencies (a database, a network) may not be up yet.
-                delay = 2.0 if time.time() - t0 > 120 else min(delay * 2, 60.0)
+                if time.time() - t0 > 120:
+                    delay = 2.0                             # it ran a while: a fresh failure, start over
                 log(f"gateway '{name}' cycle ended: {type(e).__name__}: {str(e)[:200]} — restarting child in {delay:.0f}s")
                 await asyncio.sleep(delay)
+                delay = min(delay * 2, 60.0)
 
     asyncio.run(main())
     return 0
@@ -754,7 +848,7 @@ def parse(argv: list[str]) -> tuple[str, dict, list[str]]:
     return verb, opts, rest
 
 
-def fingerprint(command: list[str], launcher: Path) -> str:
+def fingerprint(command: list[str], launcher: Path, cwd: str | None = None) -> str:
     """Content identity of what the gateway would run, so an in-place update (a
     directory-source marketplace, or a server you edit) restarts the gateway even
     though the command path is unchanged. Combines: the plugin's declared version
@@ -770,7 +864,7 @@ def fingerprint(command: list[str], launcher: Path) -> str:
                 h.update(pj.read_bytes())
             break
     for a in command[1:]:
-        pa = Path(a)
+        pa = Path(a) if os.path.isabs(a) else Path(cwd or os.getcwd()) / a
         if pa.is_file():
             h.update(pa.read_bytes())
             break
@@ -783,10 +877,11 @@ def build_spec(opts: dict, command: list[str]) -> dict:
     name = opts.get("name") or Path(command[-1]).stem
     # Resolve the executable NOW, with the session's PATH: the gateway runs under a
     # service manager whose PATH differs, and its own venv must never shadow `python3`.
-    resolved = shutil.which(command[0]) or command[0]
-    return {"name": name, "command": [resolved, *command[1:]], "resolved": bool(shutil.which(command[0])),
+    resolved = shutil.which(command[0])
+    return {"name": name, "command": list(command), "resolved_exe": resolved, "resolved": bool(resolved),
+            "port_explicit": bool(opts.get("port")),
             "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
-            "fingerprint": fingerprint([resolved, *command[1:]], Path(__file__).resolve()),
+            "fingerprint": fingerprint(list(command), Path(__file__).resolve(), opts.get("cwd") or os.getcwd()),
             "serialize": bool(opts.get("serialize")),
             "env": {k: os.environ[k] for k in opts.get("env", []) if k in os.environ},
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
@@ -807,13 +902,13 @@ def main(argv: list[str]) -> int:
         if not rest:
             log("connect needs the original command after `--`")
             return 2
-        spec = build_spec(opts, rest)
         if os.environ.get("SHARED_MCP_DISABLE") == "1" or opts.get("per-session"):
             exec_original(rest)                 # --per-session: uniform launcher, but this server must not be shared
-        try:
+        try:                                    # anything that fails before the bridge exists falls back to plain stdio
+            spec = build_spec(opts, rest)
             ensure(spec)
         except Exception as e:  # noqa: BLE001
-            log(f"cannot share '{spec['name']}' on this machine: {e}")
+            log(f"cannot share {opts.get('name') or rest[-1]!r} on this machine: {e}")
             exec_original(rest)
         return Bridge(spec).run()
     name = opts.get("name")
@@ -824,6 +919,9 @@ def main(argv: list[str]) -> int:
     if verb == "ensure":
         if not spec:
             log(f"no spec for '{name}' yet; it is created on first connect")
+            return 1
+        if not Path(spec["launcher"]).exists():
+            log(f"launcher {spec['launcher']} no longer exists (plugin removed?); run `stop --name {name}`")
             return 1
         h = ensure(spec)
         print(json.dumps(h, indent=2))
