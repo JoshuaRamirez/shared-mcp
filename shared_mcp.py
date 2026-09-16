@@ -26,6 +26,7 @@ Registers with `svc` (~/.config/svc/services.d) when that console exists.
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -38,7 +39,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -312,7 +313,8 @@ def ensure(spec: dict, wait: float = 60) -> dict:
     name, port = spec["name"], spec["port"]
     current = load_spec(name)
     running = gateway_ok(port, name)
-    same = current and current.get("command") == spec["command"] and current.get("env") == spec["env"] and current.get("launcher") == spec["launcher"]
+    same = (current and current.get("command") == spec["command"] and current.get("env") == spec["env"]
+            and current.get("launcher") == spec["launcher"] and current.get("fingerprint") == spec.get("fingerprint"))
     if running and same:
         return running
     if running and not spec.get("resolved", True):
@@ -321,7 +323,8 @@ def ensure(spec: dict, wait: float = 60) -> dict:
         log(f"gateway '{name}' is healthy; keeping it (this session cannot resolve {spec['command'][0]!r})")
         return running
     if running and not same:
-        log(f"gateway '{name}' runs an older definition; restarting with the current one")
+        why = "code changed" if current and current.get("command") == spec["command"] and current.get("env") == spec["env"] else "definition changed"
+        log(f"gateway '{name}': {why}; restarting with the current version")
     elif current is None:
         log(f"first run for '{name}': installing a shared background service so every Claude session uses ONE "
             f"copy of this server. It creates {STATE_ROOT}/venv and {state_dir(name)}, listens on 127.0.0.1:{port} only, "
@@ -666,6 +669,31 @@ def parse(argv: list[str]) -> tuple[str, dict, list[str]]:
     return verb, opts, rest
 
 
+def fingerprint(command: list[str], launcher: Path) -> str:
+    """Content identity of what the gateway would run, so an in-place update (a
+    directory-source marketplace, or a server you edit) restarts the gateway even
+    though the command path is unchanged. Combines: the plugin's declared version
+    (nearest .claude-plugin/plugin.json above the launcher), the hash of the first
+    argument that is an existing file (the entry script), and the launcher's own hash."""
+    h = hashlib.sha256()
+    for parent in [launcher.parent, *launcher.parents]:
+        pj = parent / ".claude-plugin" / "plugin.json"
+        if pj.is_file():
+            try:
+                h.update(("plugin:" + str(json.loads(pj.read_text()).get("version"))).encode())
+            except Exception:  # noqa: BLE001
+                h.update(pj.read_bytes())
+            break
+    for a in command[1:]:
+        pa = Path(a)
+        if pa.is_file():
+            h.update(pa.read_bytes())
+            break
+    if launcher.is_file():
+        h.update(launcher.read_bytes())
+    return h.hexdigest()[:16]
+
+
 def build_spec(opts: dict, command: list[str]) -> dict:
     name = opts.get("name") or Path(command[-1]).stem
     # Resolve the executable NOW, with the session's PATH: the gateway runs under a
@@ -673,6 +701,7 @@ def build_spec(opts: dict, command: list[str]) -> dict:
     resolved = shutil.which(command[0]) or command[0]
     return {"name": name, "command": [resolved, *command[1:]], "resolved": bool(shutil.which(command[0])),
             "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
+            "fingerprint": fingerprint([resolved, *command[1:]], Path(__file__).resolve()),
             "env": {k: os.environ[k] for k in opts.get("env", []) if k in os.environ},
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
 

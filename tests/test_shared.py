@@ -44,6 +44,16 @@ t0=time.time(); r4 = call(a, 14); print(f"    after gateway kill: {r4} ({time.ti
 check(r4.startswith("1 "), "bridge reconnected to the restarted gateway (counter reset => new child) and replayed the call")
 check(call(b, 15).startswith("2 "), "second bridge also reconnected")
 a.stdin.close(); b.stdin.close(); a.wait(10); b.wait(10); check(a.returncode==0 and b.returncode==0, "bridges exit 0 on stdin EOF")
+# in-place code change (same command path) must restart the gateway on the next connect
+fx = os.path.join(HERE, "fixture_server.py"); src = open(fx).read()
+open(fx, "w").write(src + "\n# touched by test\n")
+try:
+    c = bridge(); init(c)
+    r5 = call(c, 20); print("    after in-place edit:", r5)
+    check(r5.startswith("1 "), "in-place edit of the server file => gateway restarted (counter reset) although the command path was unchanged")
+    c.stdin.close(); c.wait(10)
+finally:
+    open(fx, "w").write(src)
 # svc descriptor + status + stop
 desc = os.path.expanduser(f"~/.config/svc/services.d/com.shared-mcp.{NAME}.json"); check(os.path.exists(desc), "svc descriptor written")
 st = subprocess.run([sys.executable, KIT, "status", "--name", NAME], capture_output=True, text=True); check(st.returncode==0 and '"running": true' in st.stdout, "status reports running")
