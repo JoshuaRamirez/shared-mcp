@@ -65,4 +65,6 @@ p = subprocess.Popen([sys.executable, KIT, "connect", "--name", "sm-fallback", "
 try: check(init(p)=="fixture", "FALLBACK: when a daemon cannot be set up, the original stdio server runs directly")
 except Exception as e: check(False, f"fallback: {e}")
 p.kill()
+import shutil  # cleanup state dirs the test created
+for n in (NAME, "sm-fallback"): shutil.rmtree(os.path.expanduser(f"~/.local/state/shared-mcp/{n}"), ignore_errors=True)
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
