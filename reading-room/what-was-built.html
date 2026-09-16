@@ -38,12 +38,12 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--rule);font:13
 </style></head><body><div class="shell"><nav class="toc"><h1>Shared MCP</h1><p class="sub">What was built — artifact tour</p>
 <div class="grp">Primary</div><ol><li><a href="#s0">0 · How to read this</a></li><li><a href="#s1">1 · The files</a></li></ol>
 <div class="grp">Components</div><ol><li><a href="#s2">2 · The crash fix</a></li><li><a href="#s3">3 · spec-vault's own daemon</a></li><li><a href="#s4">4 · The shared-mcp kit</a></li><li><a href="#s5">5 · The svc console</a></li></ol>
-<div class="grp">Operating</div><ol><li><a href="#s6">6 · Machine state &amp; undo</a></li><li><a href="#s7">7 · Day to day</a></li><li><a href="#s8">8 · Live evidence</a></li></ol>
+<div class="grp">Operating</div><ol><li><a href="#s6">6 · Machine state &amp; undo</a></li><li><a href="#s6b">6b · Edge cases</a></li><li><a href="#s7">7 · Day to day</a></li><li><a href="#s8">8 · Live evidence</a></li></ol>
 <div class="grp">Reference</div><ol><li><a href="#sref">R · Commits per repo</a></li></ol>
 <div class="grp">Companion</div><ol><li><a href="index.html">→ The coherent picture</a></li></ol></nav>
-<main><div class="wrap"><header class="doc"><div class="kicker">Personal infrastructure · artifact tour</div><h1>What was built: the crash fix, the shared-mcp kit, and the svc console</h1><p class="lede">A component-by-component tour of the artifacts created to stop the quit-time crash and to run each MCP server once per machine — what each file is, how it works inside, what it leaves on the machine, how to operate it, and how to remove it. Tests and inventory are run live at generation.</p><div class="meta"><span><b>Generated:</b> 2026-09-15 17:56 MST</span><span><b>Kit:</b> <a href='https://github.com/JoshuaRamirez/shared-mcp'>github.com/JoshuaRamirez/shared-mcp</a></span><span><b>Console:</b> <code>~/.local/share/svc</code></span></div></header>
+<main><div class="wrap"><header class="doc"><div class="kicker">Personal infrastructure · artifact tour</div><h1>What was built: the crash fix, the shared-mcp kit, and the svc console</h1><p class="lede">A component-by-component tour of the artifacts created to stop the quit-time crash and to run each MCP server once per machine — what each file is, how it works inside, what it leaves on the machine, how to operate it, and how to remove it. Tests and inventory are run live at generation.</p><div class="meta"><span><b>Generated:</b> 2026-09-15 18:13 MST</span><span><b>Kit:</b> <a href='https://github.com/JoshuaRamirez/shared-mcp'>github.com/JoshuaRamirez/shared-mcp</a></span><span><b>Console:</b> <code>~/.local/share/svc</code></span></div></header>
 <section id="s0"><h2><span class="num">0</span>How to read this</h2><p class="role">Front matter</p>
-<p>This room is a tour of the <em>things</em>: every file, service and configuration change made between 2026-09-13 and today to fix the quit-time crash and share MCP servers across sessions. Its companion, <a href="index.html">the coherent picture</a>, is the argument; this is the inventory. Read §1 for the map, then whichever component you want to understand. §8 is live evidence produced when this page was generated (2026-09-15 17:56 MST); rerun <code>reading-room/generate_built.py</code> to refresh it.</p>
+<p>This room is a tour of the <em>things</em>: every file, service and configuration change made between 2026-09-13 and today to fix the quit-time crash and share MCP servers across sessions. Its companion, <a href="index.html">the coherent picture</a>, is the argument; this is the inventory. Read §1 for the map, then whichever component you want to understand. §8 is live evidence produced when this page was generated (2026-09-15 18:13 MST); rerun <code>reading-room/generate_built.py</code> to refresh it.</p>
 <p>Nouns: an <b>MCP server</b> exposes tools to Claude over the Model Context Protocol; <b>stdio</b> is the one-to-one pipe transport; a <b>gateway</b> runs one server and serves many clients over HTTP on loopback; a <b>bridge</b> is the per-session stdio-to-HTTP adapter; <b>launchd</b> is macOS's service manager; a <b>descriptor</b> is the small JSON file that tells <b>svc</b> what launchd cannot know about a service.</p></section><figure><div class="cap"><span class="fno">FIG 1</span><span class="ft">Repositories, machine state, and the arrows between them. Everything under the bottom band was created by the artifacts above it and can be removed with the commands in §6.</span></div><div class="svgbox"><svg viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui" font-size="12.5">
 <defs><marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3a4d5c"/></marker></defs>
 <text x="20" y="26" font-weight="700" font-size="14" fill="#11212e">Where each artifact lives, and what talks to what</text>
@@ -61,7 +61,7 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--rule);font:13
 <g stroke="#3a4d5c" stroke-width="1.5" fill="none" marker-end="url(#m)"><path d="M165 200V238"/><path d="M490 200V238"/><path d="M815 200V238"/><path d="M310 100H338" stroke-dasharray="3 3"/><path d="M640 100H668" stroke-dasharray="3 3"/></g>
 <text x="318" y="92" fill="#3a4d5c" font-size="11">writes descriptors</text><text x="620" y="92" fill="#3a4d5c" font-size="11">vendored into</text>
 </svg></div></figure><section id="s1"><h2><span class="num">1</span>The files</h2><p class="role">What exists, with size and line counts read from disk</p>
-<table><thead><tr><th>artifact</th><th>lines</th><th>size</th><th>what it is</th><th>path</th></tr></thead><tbody><tr><td><code>shared_mcp.py</code></td><td>765</td><td>32 KB</td><td>the kit: launcher, bridge, gateway, supervision — one file, stdlib on the per-session path</td><td><code>~/Developer/shared-mcp/shared_mcp.py</code></td></tr><tr><td><code>tests/test_shared.py</code></td><td>68</td><td>5 KB</td><td>end-to-end proof: two bridges share one server, restart survival, stop, fallback</td><td><code>~/Developer/shared-mcp/tests/test_shared.py</code></td></tr><tr><td><code>tests/fixture_server.py</code></td><td>12</td><td>0 KB</td><td>tiny MCP server with a counter — the sharing witness</td><td><code>~/Developer/shared-mcp/tests/fixture_server.py</code></td></tr><tr><td><code>vendor.sh</code></td><td>6</td><td>0 KB</td><td>copies the kit byte-identically into plugin roots</td><td><code>~/Developer/shared-mcp/vendor.sh</code></td></tr><tr><td><code>svc.py</code></td><td>629</td><td>29 KB</td><td>the console: derived inventory, health, doctor, prune, verified control</td><td><code>~/.local/share/svc/svc.py</code></td></tr><tr><td><code>svc fixtures</code></td><td>—</td><td>0 KB</td><td>pinned plist classifications and launchctl output shapes</td><td><code>~/.local/share/svc/fixtures/expected.json</code></td></tr><tr><td><code>graph-server/server.py</code></td><td>2643</td><td>104 KB</td><td>spec-vault&#x27;s server: the SIGTERM fix and the --transport http mode</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/server.py</code></td></tr><tr><td><code>graph-server/daemon.sh</code></td><td>219</td><td>9 KB</td><td>spec-vault&#x27;s own daemon manager (predates the kit; bespoke)</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/daemon.sh</code></td></tr><tr><td><code>graph-server/proxy.py</code></td><td>195</td><td>7 KB</td><td>spec-vault&#x27;s per-session bridge (mcp-library based, heavier than the kit&#x27;s)</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/proxy.py</code></td></tr><tr><td><code>reading-room/generate*.py</code></td><td>173</td><td>26 KB</td><td>these rooms</td><td><code>~/Developer/shared-mcp/reading-room/generate_built.py</code></td></tr></tbody></table></section><section id="s2"><h2><span class="num">2</span>The crash fix</h2><p class="role">spec-vault graph-server/server.py — the root cause everything else grew from</p>
+<table><thead><tr><th>artifact</th><th>lines</th><th>size</th><th>what it is</th><th>path</th></tr></thead><tbody><tr><td><code>shared_mcp.py</code></td><td>851</td><td>36 KB</td><td>the kit: launcher, bridge, gateway, supervision — one file, stdlib on the per-session path</td><td><code>~/Developer/shared-mcp/shared_mcp.py</code></td></tr><tr><td><code>tests/test_shared.py</code></td><td>68</td><td>5 KB</td><td>end-to-end proof: two bridges share one server, restart survival, stop, fallback</td><td><code>~/Developer/shared-mcp/tests/test_shared.py</code></td></tr><tr><td><code>tests/fixture_server.py</code></td><td>12</td><td>0 KB</td><td>tiny MCP server with a counter — the sharing witness</td><td><code>~/Developer/shared-mcp/tests/fixture_server.py</code></td></tr><tr><td><code>vendor.sh</code></td><td>6</td><td>0 KB</td><td>copies the kit byte-identically into plugin roots</td><td><code>~/Developer/shared-mcp/vendor.sh</code></td></tr><tr><td><code>svc.py</code></td><td>633</td><td>29 KB</td><td>the console: derived inventory, health, doctor, prune, verified control</td><td><code>~/.local/share/svc/svc.py</code></td></tr><tr><td><code>svc fixtures</code></td><td>—</td><td>0 KB</td><td>pinned plist classifications and launchctl output shapes</td><td><code>~/.local/share/svc/fixtures/expected.json</code></td></tr><tr><td><code>graph-server/server.py</code></td><td>2643</td><td>104 KB</td><td>spec-vault&#x27;s server: the SIGTERM fix and the --transport http mode</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/server.py</code></td></tr><tr><td><code>graph-server/daemon.sh</code></td><td>219</td><td>9 KB</td><td>spec-vault&#x27;s own daemon manager (predates the kit; bespoke)</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/daemon.sh</code></td></tr><tr><td><code>graph-server/proxy.py</code></td><td>195</td><td>7 KB</td><td>spec-vault&#x27;s per-session bridge (mcp-library based, heavier than the kit&#x27;s)</td><td><code>~/Developer/AspenESS/ClaudeCodeMarketplace/plugins/spec-vault/graph-server/proxy.py</code></td></tr><tr><td><code>reading-room/generate*.py</code></td><td>195</td><td>28 KB</td><td>these rooms</td><td><code>~/Developer/shared-mcp/reading-room/generate_built.py</code></td></tr></tbody></table></section><section id="s2"><h2><span class="num">2</span>The crash fix</h2><p class="role">spec-vault graph-server/server.py — the root cause everything else grew from</p>
 <p><b>Symptom.</b> macOS "Python quit unexpectedly" on every Claude quit. <b>Cause.</b> The graph server's SIGTERM handler called <code>sys.exit(0)</code>. That starts Python's interpreter finalization while the MCP library's stdin reader is blocked in a read on a non-daemon worker thread that holds the stdin buffer lock. Finalization waited on that thread forever (servers lingered for days after pid-file takeover), and when Claude closed the pipe the thread woke into a finalizing Python 3.13 interpreter, was parked, and the main thread aborted with "could not acquire lock for &lt;_io.BufferedReader name='&lt;stdin&gt;'&gt; at interpreter shutdown".</p>
 <p><b>Fix</b> (commit f4ee628). The handler now runs the two cleanups itself, guarded against re-entry, and leaves via <code>os._exit(0)</code>, skipping finalization and the join. Signal registration moved below the pid-file helpers so the handler can never reference an undefined name. Verified with SIGTERM while stdin open (previously hung forever), stdin EOF then SIGTERM, and double SIGTERM: all exit 0 in under a second.</p>
 <p><b>Then</b> the same file gained <code>--transport http</code> (streamable HTTP via FastMCP, host/port flags or env) so one instance can serve every session — the first shared daemon, before the generic kit existed.</p></section><section id="s3"><h2><span class="num">3</span>spec-vault's own daemon</h2><p class="role">graph-server/daemon.sh + proxy.py — bespoke, predates the kit</p>
@@ -148,7 +148,28 @@ com.spec-vault.graph-server.json</pre>
 <tr><td>revert a plugin</td><td>put the original <code>command</code>/<code>args</code> back in its <code>.mcp.json</code>, or set <code>SHARED_MCP_DISABLE=1</code> to keep the launcher but run per session</td></tr>
 <tr><td>state</td><td><code>rm -rf ~/.local/state/shared-mcp ~/.local/state/spec-vault ~/.local/state/svc</code></td></tr>
 <tr><td>svc itself</td><td><code>rm ~/.local/bin/svc; rm -rf ~/.local/share/svc ~/.config/svc</code></td></tr>
-</tbody></table></section><section id="s7"><h2><span class="num">7</span>Operating it day to day</h2><p class="role">The five gestures</p>
+</tbody></table></section><section id="s6b"><h2><span class="num">6b</span>Edge cases</h2><p class="role">What is handled, and what is a known limit</p>
+<h3>Handled</h3><table><tbody>
+<tr><td>gateway restarts (upgrade, crash)</td><td>bridge reconnects and replays the in-flight call</td></tr>
+<tr><td>child server dies</td><td>gateway restarts it; backoff to 60 s for dependencies that come up late after login</td></tr>
+<tr><td>gateway left down</td><td>bridge runs <code>ensure</code> after 10 s of silence; launchd restarts on crash</td></tr>
+<tr><td>no daemon possible</td><td>launcher execs the original server — the old per-session behaviour</td></tr>
+<tr><td>sessions cold-start together (herdr restore)</td><td>mkdir lock serialises the bootstrap</td></tr>
+<tr><td>sessions disagree about env or command</td><td>flap guard keeps the running definition and logs why</td></tr>
+<tr><td>server code updated in place</td><td>content fingerprint (plugin version + entry script + launcher) restarts the gateway</td></tr>
+<tr><td>hashed port held by a stranger</td><td>steps forward to the next free port; a running gateway keeps its port</td></tr>
+<tr><td>two OS users on one Mac</td><td>identity and port include the user; user B never adopts user A's gateway</td></tr>
+<tr><td>plugin removed, gateway lives on</td><td><code>svc doctor</code> flags a service whose argument paths vanished</td></tr>
+<tr><td>server written for one client</td><td><code>--serialize</code>: one tool call at a time</td></tr>
+<tr><td>server that must not be shared</td><td><code>--per-session</code>: uniform launcher, original behaviour (Roslyn, browser-attached)</td></tr>
+</tbody></table>
+<h3>Known limits</h3><ul>
+<li>Server-initiated requests — roots, sampling, elicitation — are not forwarded to a particular session. A server that needs them is per-session by nature; use <code>--per-session</code>. (All three are deprecated in the 2026-07-28 spec.)</li>
+<li>Server→client notifications (progress, tools-list-changed) are not relayed; a session sees a changed tool list on reconnect.</li>
+<li>A single tool call longer than 600 s trips the bridge's HTTP timeout.</li>
+<li>When Claude Code moves to the 2026-07-28 protocol, the gateway's <code>mcp</code> dependency must be bumped; the bridge already tolerates both generations.</li>
+<li>Linux (systemd --user) and Windows (detached process, no auto-restart) paths are implemented but have not been exercised on this machine.</li>
+</ul></section><section id="s7"><h2><span class="num">7</span>Operating it day to day</h2><p class="role">The five gestures</p>
 <ol>
 <li><b>Something MCP-ish feels off:</b> <code>svc doctor</code>, then <code>svc show mcp-&lt;name&gt;</code>, then <code>svc logs mcp-&lt;name&gt;</code>.</li>
 <li><b>A tool says the server failed to connect:</b> <code>svc health</code>. If the gateway is up, <code>/mcp</code> reconnect in that session; if not, <code>svc restart mcp-&lt;name&gt; --go</code> (or wait — a bridge revives its gateway after 10 s).</li>
@@ -158,17 +179,17 @@ com.spec-vault.graph-server.json</pre>
 </ol></section><section id="s8"><h2><span class="num">8</span>Live evidence</h2><p class="role">Produced when this page was generated</p>
 <h3>shared-mcp end-to-end test</h3><pre>first bridge initialised in 5.9s (cold gateway)
 ok   server name via bridge = fixture
-    1 pid=11190 token=secret-xyz | 2 pid=11190 token=secret-xyz | 3 pid=11190 token=secret-xyz
+    1 pid=65310 token=secret-xyz | 2 pid=65310 token=secret-xyz | 3 pid=65310 token=secret-xyz
 ok   counter continues across two bridges =&gt; ONE shared server process
 ok   declared env var forwarded to the shared server
 ok   same child pid for all calls
-    bridge RSS: 27 MB / 27 MB
+    bridge RSS: 28 MB / 28 MB
 ok   tools/list forwarded
-    after gateway kill: 1 pid=13880 token=secret-xyz (3.6s)
+    after gateway kill: 1 pid=68703 token=secret-xyz (4.1s)
 ok   bridge reconnected to the restarted gateway (counter reset =&gt; new child) and replayed the call
 ok   second bridge also reconnected
 ok   bridges exit 0 on stdin EOF
-    after in-place edit: 1 pid=17092 token=secret-xyz
+    after in-place edit: 1 pid=72747 token=secret-xyz
 ok   in-place edit of the server file =&gt; gateway restarted (counter reset) although the command path was unchanged
 ok   svc descriptor written
 ok   status reports running
@@ -197,16 +218,18 @@ icloud-mcp                     service   running      54537  7801   ok      blin
 icloud-sync                    periodic  not running  -      -      ok      blind  every 10m                      Headless iCloud mirror sync + mechanical rule au
 ado-dash                       periodic  not running  -      -      ok      21K    at 04:45, 05:45, 16:45, 17:45  Rebuilds the AspenESS commit dashboard (fetch AD
 svc-prune                      periodic  not running  -      -      ok      21B    at 03:30                       Daily at 03:30: bounds every owned service&#x27;s log
-mcp-ado-backlog-sync           service   running      90951  48379  ok      941K   keepalive                      shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MC
-mcp-advanced-prompting-engine  service   running      93979  48410  ok      4M     keepalive                      shared-mcp gateway for the &#x27;advanced-prompting-e
-mcp-efforts                    service   running      7503   48793  ok      1M     keepalive                      shared-mcp gateway for the &#x27;efforts&#x27; MCP server:
-mcp-graphology                 service   running      4049   48103  ok      5K     keepalive                      shared-mcp gateway for the &#x27;graphology&#x27; MCP serv
-mcp-projam                     service   running      640    48533  ok      746B   keepalive                      shared-mcp gateway for the &#x27;projam&#x27; MCP server:
-mcp-prompt-library             service   running      97497  47943  ok      2K     keepalive                      shared-mcp gateway for the &#x27;prompt-library&#x27; MCP
+mcp-ado-backlog-sync           service   running      27882  48379  ok      942K   keepalive                      shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MC
+mcp-advanced-prompting-engine  service   running      32474  48410  ok      4M     keepalive                      shared-mcp gateway for the &#x27;advanced-prompting-e
+mcp-efforts                    service   running      57997  48793  ok      1M     keepalive                      shared-mcp gateway for the &#x27;efforts&#x27; MCP server:
+mcp-graphology                 service   running      48665  48103  ok      5K     keepalive                      shared-mcp gateway for the &#x27;graphology&#x27; MCP serv
+mcp-projam                     service   running      41892  48533  ok      921B   keepalive                      shared-mcp gateway for the &#x27;projam&#x27; MCP server:
+mcp-prompt-library             service   running      37647  47943  ok      2K     keepalive                      shared-mcp gateway for the &#x27;prompt-library&#x27; MCP
 spec-vault-graph               service   running      42734  47765  ok      5M     keepalive                      spec-vault plugin&#x27;s shared MCP graph server (Lad
 
 (9 vendor/brew agents hidden; --all to show)</pre>
-<h3>svc doctor</h3><pre>doctor: no findings</pre></section><section id="sref"><h2><span class="num">R</span>Commits since 2026-09-13, per repository</h2><p class="role">Derived from git</p><h4>shared-mcp (public)</h4><pre>23e8dbc 2026-09-15 0.2.1: content fingerprint (plugin version + entry script + launcher) so in-place server updates restart the gateway; test covers it
+<h3>svc doctor</h3><pre>doctor: no findings</pre></section><section id="sref"><h2><span class="num">R</span>Commits since 2026-09-13, per repository</h2><p class="role">Derived from git</p><h4>shared-mcp (public)</h4><pre>823ea5b 2026-09-15 0.2.2: ensure lock, flap guard, per-user identity + port, free-port fallback, child restart backoff, --serialize, --per-session; README: reading rooms, edge cases
+e7c3be6 2026-09-15 reading rooms: version-change behaviour and fingerprinting
+23e8dbc 2026-09-15 0.2.1: content fingerprint (plugin version + entry script + launcher) so in-place server updates restart the gateway; test covers it
 866e41b 2026-09-15 reading room: artifact tour (what-was-built.html) with live tests and inventory; shared roomlib
 dbd0be7 2026-09-15 reading room: close-out state
 596d7c7 2026-09-15 reading room: standards alignment, push status
@@ -215,9 +238,11 @@ dbd0be7 2026-09-15 reading room: close-out state
 cc720ba 2026-09-15 0.1.3: ping error reply means alive (custom servers reject ping -&gt; restart loop); keep a healthy gateway when a session cannot resolve the executable
 a73c65f 2026-09-14 0.1.2: pipelined messages wait for the initialize session id (race -&gt; HTTP 400)
 0d04ec6 2026-09-14 0.1.1: resolve the original executable at connect time and give the gateway the session&#x27;s PATH (venv shadowed python3)
-d816551 2026-09-14 shared-mcp 0.1.0: share one stdio MCP server per machine — stdlib bridge, mcp gateway, launchd/systemd/detached supervision, fallback to plain stdio, e2e test</pre><h4>svc</h4><pre>57bcfcd 2026-09-15 prune: dedupe shared log directories; daily agent
+d816551 2026-09-14 shared-mcp 0.1.0: share one stdio MCP server per machine — stdlib bridge, mcp gateway, launchd/systemd/detached supervision, fallback to plain stdio, e2e test</pre><h4>svc</h4><pre>4c66f12 2026-09-15 doctor: flag services whose argument paths vanished (orphaned gateways after plugin removal)
+57bcfcd 2026-09-15 prune: dedupe shared log directories; daily agent
 84da617 2026-09-14 doctor: flag log directories piling up (count or total size)
-3f51cf3 2026-09-14 svc v0.1: derived inventory of launchd agents, health, doctor, verified control, fixtures</pre><h4>ClaudeCodeMarketplace</h4><pre>8ed9314 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
+3f51cf3 2026-09-14 svc v0.1: derived inventory of launchd agents, health, doctor, verified control, fixtures</pre><h4>ClaudeCodeMarketplace</h4><pre>c0ec481 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
+8ed9314 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 ef4891b 2026-09-15 🐛 fix(spec-vault): restart the shared daemon when the plugin version or server.py changes in place (directory-source marketplaces keep the same path)
 6c4922c 2026-09-15 📝 docs: link the published shared-mcp kit
 3082ae4 2026-09-15 ⬆️ chore(marketplace): spec-vault 0.12.0, ado-backlog-sync 0.4.0 (shared MCP server)
@@ -232,13 +257,15 @@ f10b977 2026-09-14 🔧 chore(spec-vault): daemon self-registers with svc, rotat
 ed33b50 2026-09-13 🔧 chore(spec-vault): point plugin at the shared HTTP daemon, bump to 0.12.0
 f8f883e 2026-09-13 ✨ feat(spec-vault): HTTP transport + launchd agent so one graph daemon serves every session
 b1980f7 2026-09-13 🐛 fix(spec-vault): exit via os._exit on SIGTERM so the graph server stops aborting at Claude quit
-abcc9cf 2026-09-15 🔎 feat(efforts-status): the evidence sweep behind the Efforts wiki, as a plugin (v1.0.0)</pre><h4>advanced-prompting-engine</h4><pre>4133dc6 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
+abcc9cf 2026-09-15 🔎 feat(efforts-status): the evidence sweep behind the Efforts wiki, as a plugin (v1.0.0)</pre><h4>advanced-prompting-engine</h4><pre>20b71ae 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
+4133dc6 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 b396f91 2026-09-15 📝 docs: link the published shared-mcp kit
 55ee94a 2026-09-15 📝 docs: disclose the shared background MCP service, opt-out and removal; shared-mcp 0.2.0 (liveness RPC, server card, session-agnostic bridge, first-run notice)
 6380153 2026-09-15 ⬆️ chore: shared-mcp 0.1.3
 ada0af0 2026-09-14 ⬆️ chore: shared-mcp 0.1.2
 9ff8fe4 2026-09-14 ⬆️ chore: shared-mcp 0.1.1 (PATH/executable resolution fix)
-ff13e21 2026-09-14 ✨ feat(plugin): share one MCP server per machine via vendored shared-mcp launcher (falls back to plain stdio)</pre><h4>claude-code-profile (prompt-library)</h4><pre>90e3b3f 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
+ff13e21 2026-09-14 ✨ feat(plugin): share one MCP server per machine via vendored shared-mcp launcher (falls back to plain stdio)</pre><h4>claude-code-profile (prompt-library)</h4><pre>de9837a 2026-09-15 ⬆️ chore: shared-mcp 0.2.2 (lock, flap guard, per-user identity, port fallback, backoff, --serialize/--per-session)
+90e3b3f 2026-09-15 ⬆️ chore: shared-mcp 0.2.1 (in-place update detection)
 ca63c46 2026-09-15 📝 docs: link the published shared-mcp kit
 3fd8af1 2026-09-15 📝 docs: disclose the shared background MCP service, opt-out and removal; shared-mcp 0.2.0 (liveness RPC, server card, session-agnostic bridge, first-run notice)
 13d1c5c 2026-09-15 ⬆️ chore: shared-mcp 0.1.3

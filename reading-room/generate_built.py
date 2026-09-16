@@ -144,6 +144,28 @@ sec("s6","6","Machine state this created, and how to undo it","Everything that e
 <tr><td>state</td><td><code>rm -rf ~/.local/state/shared-mcp ~/.local/state/spec-vault ~/.local/state/svc</code></td></tr>
 <tr><td>svc itself</td><td><code>rm ~/.local/bin/svc; rm -rf ~/.local/share/svc ~/.config/svc</code></td></tr>
 </tbody></table>"""),
+sec("s6b","6b","Edge cases","What is handled, and what is a known limit", """
+<h3>Handled</h3><table><tbody>
+<tr><td>gateway restarts (upgrade, crash)</td><td>bridge reconnects and replays the in-flight call</td></tr>
+<tr><td>child server dies</td><td>gateway restarts it; backoff to 60 s for dependencies that come up late after login</td></tr>
+<tr><td>gateway left down</td><td>bridge runs <code>ensure</code> after 10 s of silence; launchd restarts on crash</td></tr>
+<tr><td>no daemon possible</td><td>launcher execs the original server — the old per-session behaviour</td></tr>
+<tr><td>sessions cold-start together (herdr restore)</td><td>mkdir lock serialises the bootstrap</td></tr>
+<tr><td>sessions disagree about env or command</td><td>flap guard keeps the running definition and logs why</td></tr>
+<tr><td>server code updated in place</td><td>content fingerprint (plugin version + entry script + launcher) restarts the gateway</td></tr>
+<tr><td>hashed port held by a stranger</td><td>steps forward to the next free port; a running gateway keeps its port</td></tr>
+<tr><td>two OS users on one Mac</td><td>identity and port include the user; user B never adopts user A's gateway</td></tr>
+<tr><td>plugin removed, gateway lives on</td><td><code>svc doctor</code> flags a service whose argument paths vanished</td></tr>
+<tr><td>server written for one client</td><td><code>--serialize</code>: one tool call at a time</td></tr>
+<tr><td>server that must not be shared</td><td><code>--per-session</code>: uniform launcher, original behaviour (Roslyn, browser-attached)</td></tr>
+</tbody></table>
+<h3>Known limits</h3><ul>
+<li>Server-initiated requests — roots, sampling, elicitation — are not forwarded to a particular session. A server that needs them is per-session by nature; use <code>--per-session</code>. (All three are deprecated in the 2026-07-28 spec.)</li>
+<li>Server→client notifications (progress, tools-list-changed) are not relayed; a session sees a changed tool list on reconnect.</li>
+<li>A single tool call longer than 600 s trips the bridge's HTTP timeout.</li>
+<li>When Claude Code moves to the 2026-07-28 protocol, the gateway's <code>mcp</code> dependency must be bumped; the bridge already tolerates both generations.</li>
+<li>Linux (systemd --user) and Windows (detached process, no auto-restart) paths are implemented but have not been exercised on this machine.</li>
+</ul>"""),
 sec("s7","7","Operating it day to day","The five gestures", """
 <ol>
 <li><b>Something MCP-ish feels off:</b> <code>svc doctor</code>, then <code>svc show mcp-&lt;name&gt;</code>, then <code>svc logs mcp-&lt;name&gt;</code>.</li>
@@ -162,7 +184,7 @@ sec("sref","R","Commits since 2026-09-13, per repository","Derived from git", ""
 nav = """<nav class="toc"><h1>Shared MCP</h1><p class="sub">What was built — artifact tour</p>
 <div class="grp">Primary</div><ol><li><a href="#s0">0 · How to read this</a></li><li><a href="#s1">1 · The files</a></li></ol>
 <div class="grp">Components</div><ol><li><a href="#s2">2 · The crash fix</a></li><li><a href="#s3">3 · spec-vault's own daemon</a></li><li><a href="#s4">4 · The shared-mcp kit</a></li><li><a href="#s5">5 · The svc console</a></li></ol>
-<div class="grp">Operating</div><ol><li><a href="#s6">6 · Machine state &amp; undo</a></li><li><a href="#s7">7 · Day to day</a></li><li><a href="#s8">8 · Live evidence</a></li></ol>
+<div class="grp">Operating</div><ol><li><a href="#s6">6 · Machine state &amp; undo</a></li><li><a href="#s6b">6b · Edge cases</a></li><li><a href="#s7">7 · Day to day</a></li><li><a href="#s8">8 · Live evidence</a></li></ol>
 <div class="grp">Reference</div><ol><li><a href="#sref">R · Commits per repo</a></li></ol>
 <div class="grp">Companion</div><ol><li><a href="index.html">→ The coherent picture</a></li></ol></nav>"""
 OUT.write_text(page("Shared MCP — What Was Built · Reading Room", "Personal infrastructure · artifact tour",
