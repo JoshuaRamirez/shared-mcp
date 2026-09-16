@@ -235,7 +235,7 @@ com.spec-vault.graph-server.json</pre>
 <li><b>New plugin with an MCP server:</b> <code>vendor.sh &lt;plugin-dir&gt;</code>, point its <code>.mcp.json</code> at <code>connect</code>, declare forwarded env with <code>--env</code>, add the README disclosure paragraph. Do not share a server that depends on the session's working directory or attaches to a per-session resource.</li>
 <li><b>New background job of any kind:</b> <code>svc register &lt;label&gt; --go</code> and fill in purpose; give it a health probe.</li>
 </ol></section><section id="a9"><h2><span class="num">13</span>Live evidence</h2><p class="role">Produced when this page was generated</p>
-<p><b>16</b> Claude processes running; MCP-related processes: <b>109</b>, holding <b>3850 MB</b> (130 processes / 5.8 GB before the conversion).</p>
+<p><b>14</b> Claude processes running; MCP-related processes: <b>109</b>, holding <b>3851 MB</b> (130 processes / 5.8 GB before the conversion).</p>
 <table><thead><tr><th>gateway</th><th>state</th><th>port</th><th>health</th><th>bridges</th><th>purpose</th></tr></thead><tbody><tr><td><code>mcp-ado-backlog-sync</code></td><td>running</td><td>48379</td><td class='ok'>ok</td><td>11</td><td>shared-mcp gateway for the &#x27;ado-backlog-sync&#x27; MCP server: runs `/opt/homebrew/bin/python3 /Users/joshua/Develo</td></tr>
 <tr><td><code>mcp-advanced-prompting-engine</code></td><td>running</td><td>48410</td><td class='ok'>ok</td><td>14</td><td>shared-mcp gateway for the &#x27;advanced-prompting-engine&#x27; MCP server: runs `/opt/homebrew/bin/python3 -m advanced</td></tr>
 <tr><td><code>mcp-efforts</code></td><td>running</td><td>48793</td><td class='ok'>ok</td><td>15</td><td>shared-mcp gateway for the &#x27;efforts&#x27; MCP server: runs `/Users/joshua/.nvm/versions/node/v24.18.0/bin/node /Use</td></tr>
@@ -245,17 +245,17 @@ com.spec-vault.graph-server.json</pre>
 <tr><td><code>spec-vault-graph</code></td><td>running</td><td>47765</td><td class='ok'>ok</td><td>11</td><td>spec-vault plugin&#x27;s shared MCP graph server (LadybugDB knowledge graph of the DDUI spec vault). One daemon for</td></tr></tbody></table>
 <h3>shared-mcp end-to-end test</h3><pre>first bridge initialised in 5.9s (cold gateway)
 ok   server name via bridge = fixture
-    1 pid=58224 token=secret-xyz | 2 pid=58224 token=secret-xyz | 3 pid=58224 token=secret-xyz
+    1 pid=81523 token=secret-xyz | 2 pid=81523 token=secret-xyz | 3 pid=81523 token=secret-xyz
 ok   counter continues across two bridges =&gt; ONE shared server process
 ok   declared env var forwarded to the shared server
 ok   same child pid for all calls
     bridge RSS: 29 MB / 28 MB
 ok   tools/list forwarded
-    after gateway kill: 1 pid=63492 token=secret-xyz (3.6s)
+    after gateway kill: 1 pid=86341 token=secret-xyz (3.6s)
 ok   bridge reconnected to the restarted gateway (counter reset =&gt; new child) and replayed the call
 ok   second bridge also reconnected
 ok   bridges exit 0 on stdin EOF
-    after in-place edit: 1 pid=69304 token=secret-xyz
+    after in-place edit: 1 pid=91982 token=secret-xyz
 ok   in-place edit of the server file =&gt; gateway restarted (counter reset) although the command path was unchanged
 ok   svc descriptor written
 ok   status reports running
@@ -308,7 +308,8 @@ spec-vault-graph               service   running      42734  47765  ok      5M  
 <p><b>Legibility of addresses.</b> Hashed ports are correct for plugins shipped to strangers and unmemorable for the owner. For your three personal servers — projam, graphology, efforts — the right answer is one front door: a single process on one readable port with a path per server, e.g. <code>http://127.0.0.1:47800/servers/projam/mcp</code>. The open-source <a href="https://github.com/sparfenyuk/mcp-proxy">mcp-proxy</a> does exactly this in its server mode, one child per named server shared by every client. It cannot replace the kit inside plugins (it is a package with dependencies, not a single vendorable file, and it has no fallback), but for the personal three it removes 36 bridges and three launchd agents in exchange for one.</p>
 <p><b>Published.</b> The kit is public at <a href="https://github.com/JoshuaRamirez/shared-mcp">github.com/JoshuaRamirez/shared-mcp</a>; the marketplace (Azure DevOps, spec-vault 0.12.0 and ado-backlog-sync 0.4.0), advanced-prompting-engine (feature branch) and claude-code-profile (prompt-library) are pushed.</p>
 <p><b>What direct HTTP gives up.</b> Claude Code reconnects to HTTP servers with backoff, but the documentation does not say whether a terminated session after a gateway restart is retried; a <code>/mcp</code> reconnect may be needed in open sessions after the rare gateway restart. The bridge hides this today.</p>
-<p><b>Closed out 2026-09-15.</b> Neo4j is up and graphology answers through its gateway. <code>svc prune</code> freed 204 MB of AutoBets per-run logs and a daily agent keeps every owned service's log footprint bounded. The iCloud agents were never blind (stderr is captured; stdout is discarded on purpose) and the doctor rule now says so. <code>ai.openclaw.gateway</code> is the user's own <code>openclaw</code> npm gateway, registered with purpose and probe. The duplicate spec-vault plugin from the private marketplace is uninstalled. <code>svc doctor</code>: no findings.</p></section><section id="sref"><h2><span class="num">R</span>Commits since 2026-09-13, per repository</h2><p class="role">Derived from git</p><h4>shared-mcp (public)</h4><pre>76d7b3f 2026-09-15 reading room: review-driven hardening
+<p><b>Closed out 2026-09-15.</b> Neo4j is up and graphology answers through its gateway. <code>svc prune</code> freed 204 MB of AutoBets per-run logs and a daily agent keeps every owned service's log footprint bounded. The iCloud agents were never blind (stderr is captured; stdout is discarded on purpose) and the doctor rule now says so. <code>ai.openclaw.gateway</code> is the user's own <code>openclaw</code> npm gateway, registered with purpose and probe. The duplicate spec-vault plugin from the private marketplace is uninstalled. <code>svc doctor</code>: no findings.</p></section><section id="sref"><h2><span class="num">R</span>Commits since 2026-09-13, per repository</h2><p class="role">Derived from git</p><h4>shared-mcp (public)</h4><pre>1be7eea 2026-09-15 room: daily refresh 2026-09-15
+76d7b3f 2026-09-15 reading room: review-driven hardening
 4eb01b2 2026-09-15 0.3.0: hardening from review — live port in bridge, non-raising reconnect, init release on failure, lock with heartbeat/atomic stale claim/no foreign rmdir, global venv lock, restart_ok=False for reconnecting bridges (no downgrade), wait for a starting service, declared-command identity, explicit --port, scoped label/port under SHARED_MCP_STATE, strict owner, XML/shlex escaping, streaming log rotate, blob resources, guarded upstream calls (serialize all; watchdog quiet while busy, 2 misses), backoff order, fallback covers build_spec, ensure checks launcher exists; unit tests
 f7a7e21 2026-09-15 test: remove its own state dirs
 0bd1b15 2026-09-15 reading room: edge cases section

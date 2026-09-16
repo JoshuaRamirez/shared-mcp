@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Regenerate the reading room on every commit so it never describes a stale kit.
+# (Runs the test suites — a commit to the kit should run them anyway.)
+set -e
+cd "$(git rev-parse --show-toplevel)"
+python3 reading-room/generate.py >/dev/null
+git add reading-room/index.html
