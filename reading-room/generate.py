@@ -56,6 +56,7 @@ def frow(n, p, d):
     return f"<tr><td><code>{E(n)}</code></td><td>{lines(p) if p.suffix in ('.py','.sh') else '—'}</td><td>{size//1024} KB</td><td>{E(d)}</td><td><code>{E(str(p).replace(str(H),'~'))}</code></td></tr>"
 
 unit_test = sh("python3 tests/test_unit.py 2>&1 | grep -v '^\\[shared-mcp\\]'", cwd=H/"Developer/shared-mcp")
+detached_test = sh("python3 tests/test_detached.py 2>&1 | grep -v '^\\[shared-mcp\\]'", cwd=H/"Developer/shared-mcp")
 def gw_rows():
     r = []
     for s in sorted(gw, key=lambda x: x["name"]):
@@ -232,7 +233,7 @@ sec("a7","11","Edge cases","What is handled, and what is a known limit", """
 <li>Server→client notifications (progress, tools-list-changed) are not relayed; a session sees a changed tool list on reconnect.</li>
 <li>A single tool call longer than 600 s trips the bridge's HTTP timeout.</li>
 <li>When Claude Code moves to the 2026-07-28 protocol, the gateway's <code>mcp</code> dependency must be bumped; the bridge already tolerates both generations.</li>
-<li>Linux (systemd --user) and Windows (detached process, no auto-restart) paths are implemented but have not been exercised on this machine.</li>
+<li>The systemd --user path is implemented but not exercised here (no Linux host or container runtime). The detached-process path that Windows and systemd-less Linux use <em>is</em> exercised, by forcing the kit off launchd in <code>tests/test_detached.py</code>: start, health, no-op ensure, revive after kill, stop. Its one real limit stands: without a service manager nothing restarts a killed gateway until the next session connects.</li>
 </ul>"""),
 sec("a8","12","Operating it day to day","The five gestures", """
 <ol>
@@ -246,7 +247,7 @@ sec("a9","13","Live evidence","Produced when this page was generated", f"""
 <p><b>{sessions}</b> Claude processes running; MCP-related processes: <b>{mem_n}</b>, holding <b>{mem_mb} MB</b> (130 processes / 5.8 GB before the conversion).</p>
 <table><thead><tr><th>gateway</th><th>state</th><th>port</th><th>health</th><th>bridges</th><th>purpose</th></tr></thead><tbody>{gw_rows()}</tbody></table>
 <p class="small">Derived live from svc and the process table. Health verdicts come from a live probe of each gateway's <code>/health</code> (or <code>/mcp</code> for spec-vault); "bridges" counts per-session bridge processes currently attached.</p>
-<h3>shared-mcp end-to-end test</h3>{pre(kit_test)}<h3>shared-mcp unit tests</h3>{pre(unit_test)}
+<h3>shared-mcp end-to-end test</h3>{pre(kit_test)}<h3>shared-mcp unit tests</h3>{pre(unit_test)}<h3>shared-mcp detached-supervision path (Linux-without-systemd / Windows branch, forced on this Mac)</h3>{pre(detached_test)}
 <h3>svc selftest</h3>{pre(svc_test)}
 <h3>svc list</h3>{pre(svc_list)}
 <h3>svc doctor</h3>{pre(svc_doc)}"""),

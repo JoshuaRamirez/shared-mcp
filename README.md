@@ -26,7 +26,7 @@ Caveat: a shared server is machine-scoped. A server whose behaviour depends on t
 session's working directory should not be shared (the first session's cwd wins).
 
 Vendor into a plugin: `./vendor.sh <plugin-dir>...` (copies `shared_mcp.py`, stamps version).
-Tests: `python3 tests/test_shared.py`.
+Tests: `python3 tests/test_shared.py` (end-to-end), `tests/test_unit.py` (bridge failure paths, lock), `tests/test_detached.py` (the no-service-manager supervision branch, forced on macOS).
 
 ## What it installs on a user's machine (disclosure)
 
@@ -61,7 +61,7 @@ session — a server that needs them is per-session by nature, use `--per-sessio
 notifications (progress, tools-list-changed) are not relayed, so a session sees tool-list changes on
 reconnect; a call longer than 600 s trips the bridge's HTTP timeout (`SPEC_VAULT`-style env override
 not yet exposed); when Claude Code moves to the 2026-07-28 protocol the gateway's `mcp` dependency
-must be bumped (`MCP_REQUIREMENT`); Windows and Linux paths are implemented but untested here.
+must be bumped (`MCP_REQUIREMENT`); the systemd path is untested here; the detached-process path (Windows, systemd-less Linux) is covered by `tests/test_detached.py`.
 
 ## Standards alignment (checked 2026-09-15)
 
