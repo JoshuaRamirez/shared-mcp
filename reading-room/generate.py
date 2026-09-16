@@ -37,7 +37,8 @@ for label, path, spec in [("shared-mcp (public)", H/"Developer/shared-mcp", ".")
                           ("ClaudeCodeMarketplace", H/"Developer/AspenESS/ClaudeCodeMarketplace", "plugins/spec-vault plugins/ado-backlog-sync .claude-plugin/marketplace.json"),
                           ("advanced-prompting-engine", H/"Developer/advanced-prompting-engine", "shared_mcp.py .mcp.json README.md"),
                           ("claude-code-profile (prompt-library)", H/".claude/skills/prompt-library", "shared_mcp.py .mcp.json README.md")]:
-    commits[label] = sh(f"git log --since=2026-09-13 --format='%h %ad %s' --date=short -- {spec}", cwd=path).strip()
+    # exclude the room's own refresh commits so a daily refresh cannot feed itself a new diff
+    commits[label] = sh(f"git log --since=2026-09-13 --invert-grep --grep='^room' --format='%h %ad %s' --date=short -- {spec}", cwd=path).strip()
 files = [
  ("shared_mcp.py", KIT, "the kit: launcher, bridge, gateway, supervision — one file, stdlib on the per-session path"),
  ("tests/test_shared.py", H/"Developer/shared-mcp/tests/test_shared.py", "end-to-end proof: two bridges share one server, restart survival, stop, fallback"),
