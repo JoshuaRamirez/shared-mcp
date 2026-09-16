@@ -20,6 +20,9 @@ staying safe on any machine:
      command directly. Worst case is exactly today's behaviour, never a broken server.
   The bridge reconnects and replays when the gateway restarts (plugin upgrade, crash).
 
+Flags on connect: --env KEY (forward a declared env var; repeatable), --port P, --cwd DIR,
+  --serialize (one tool call at a time, for servers written for a single client),
+  --per-session (keep the launcher but never share: cwd-dependent or browser-attached servers).
 Other verbs: ensure|status|stop|logs --name N ; gateway --spec FILE (internal).
 State lives in ~/.local/state/shared-mcp/<name>/ (spec.json 0600, gateway.log).
 Registers with `svc` (~/.config/svc/services.d) when that console exists.
@@ -39,7 +42,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -60,8 +63,29 @@ def state_dir(name: str) -> Path:
     return d
 
 
+def owner_tag() -> str:
+    """Per-user identity; two users on one machine share 127.0.0.1 and must not share gateways."""
+    try:
+        return f"{os.getuid()}"
+    except AttributeError:                 # Windows
+        return os.environ.get("USERNAME", "user")
+
+
 def stable_port(name: str) -> int:
-    return 47800 + zlib.crc32(name.encode()) % 1000
+    return 47800 + zlib.crc32(f"{owner_tag()}:{name}".encode()) % 1000
+
+
+def free_port_near(port: int, name: str) -> int:
+    """If the hashed port is held by something that is not our gateway, walk forward to a free one."""
+    import socket
+    for candidate in range(port, port + 20):
+        if gateway_ok(candidate, name):
+            return candidate
+        with socket.socket() as sock:
+            sock.settimeout(0.3)
+            if sock.connect_ex(("127.0.0.1", candidate)) != 0:
+                return candidate
+    return port
 
 
 def load_spec(name: str) -> dict | None:
@@ -105,7 +129,7 @@ def health(port: int, timeout: float = 1.5) -> dict | None:
 
 def gateway_ok(port: int, name: str) -> dict | None:
     h = health(port)
-    return h if h and h.get("name") == name else None
+    return h if h and h.get("name") == name and str(h.get("owner", owner_tag())) == owner_tag() else None
 
 
 def wait_ok(port: int, name: str, seconds: float) -> dict | None:
@@ -308,11 +332,59 @@ def rotate_log(name: str) -> None:
         pass
 
 
+class _Lock:
+    """mkdir lock so sessions restored in a batch do not race the bootstrap."""
+    def __init__(self, name: str):
+        self.path = state_dir(name) / "ensure.lock"
+    def __enter__(self):
+        for _ in range(240):
+            try:
+                self.path.mkdir(); return self
+            except FileExistsError:
+                try:
+                    if time.time() - self.path.stat().st_mtime > 90:
+                        self.path.rmdir(); continue
+                except OSError:
+                    pass
+                time.sleep(0.25)
+        return self                            # give up waiting; proceed rather than hang forever
+    def __exit__(self, *a):
+        try: self.path.rmdir()
+        except OSError: pass
+
+
+def _flapping(name: str, spec: dict) -> bool:
+    """True if this exact definition was replaced by another within the last 10 minutes —
+    two sessions declaring different env/commands would otherwise restart the gateway forever."""
+    hist_p = state_dir(name) / "spec-history.json"
+    key = json.dumps([spec["command"], spec["env"], spec.get("fingerprint")], sort_keys=True)
+    try:
+        hist = json.loads(hist_p.read_text())
+    except Exception:  # noqa: BLE001
+        hist = []
+    now = time.time()
+    hist = [h for h in hist if now - h["t"] < 600][-6:]
+    seen_recently = any(h["k"] == key for h in hist) and any(h["k"] != key for h in hist)
+    hist.append({"k": key, "t": now})
+    hist_p.write_text(json.dumps(hist))
+    return seen_recently
+
+
 def ensure(spec: dict, wait: float = 60) -> dict:
+    with _Lock(spec["name"]):
+        return _ensure_locked(spec, wait)
+
+
+def _ensure_locked(spec: dict, wait: float) -> dict:
     """Make the gateway for spec run with THIS spec; returns its health card or raises."""
-    name, port = spec["name"], spec["port"]
+    name = spec["name"]
     current = load_spec(name)
-    running = gateway_ok(port, name)
+    if current and current.get("port"):
+        spec["port"] = current["port"]                          # keep the port a running gateway already uses
+    running = gateway_ok(spec["port"], name)
+    if not running:
+        spec["port"] = free_port_near(spec["port"], name)      # hashed port held by a stranger? step forward
+    port = spec["port"]
     same = (current and current.get("command") == spec["command"] and current.get("env") == spec["env"]
             and current.get("launcher") == spec["launcher"] and current.get("fingerprint") == spec.get("fingerprint"))
     if running and same:
@@ -321,6 +393,10 @@ def ensure(spec: dict, wait: float = 60) -> dict:
         # This session's PATH cannot even find the executable; a healthy gateway started by a
         # better-equipped session must not be replaced by a definition that cannot run.
         log(f"gateway '{name}' is healthy; keeping it (this session cannot resolve {spec['command'][0]!r})")
+        return running
+    if running and not same and _flapping(name, spec):
+        log(f"gateway '{name}': sessions disagree about its definition (env or command); keeping the running one. "
+            f"Give each variant its own --name, or align the declared env.")
         return running
     if running and not same:
         why = "code changed" if current and current.get("command") == spec["command"] and current.get("env") == spec["env"] else "definition changed"
@@ -534,9 +610,14 @@ def run_gateway(spec_path: str) -> int:
                     async def _lt() -> list[types.Tool]:
                         return (await up.list_tools()).tools
 
+                    call_lock = anyio.Lock() if spec.get("serialize") else None
+
                     @srv.call_tool(validate_input=False)
                     async def _ct(n: str, a: dict | None) -> types.CallToolResult:
-                        return await up.call_tool(n, a or {})
+                        if call_lock is None:
+                            return await up.call_tool(n, a or {})
+                        async with call_lock:               # --serialize: one tool call at a time for single-client servers
+                            return await up.call_tool(n, a or {})
                 if caps.prompts is not None:
                     @srv.list_prompts()
                     async def _lp() -> list[types.Prompt]:
@@ -562,7 +643,7 @@ def run_gateway(spec_path: str) -> int:
                     tools_snapshot = []
 
                 async def health_ep(_req):
-                    return JSONResponse({"name": name, "version": VERSION, "server": init.serverInfo.name,
+                    return JSONResponse({"name": name, "owner": owner_tag(), "version": VERSION, "server": init.serverInfo.name,
                                          "uptime_s": int(time.time() - started), "child_restarts": child_info["restarts"],
                                          "spec": spec_path, "pid": os.getpid()})
 
@@ -626,15 +707,19 @@ def run_gateway(spec_path: str) -> int:
     _got_signal = {"v": False}
 
     async def main() -> None:
+        delay = 2.0
         while True:
+            t0 = time.time()
             try:
                 await serve_once()
                 return                          # clean shutdown (signal)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 return
             except BaseException as e:  # noqa: BLE001
-                log(f"gateway '{name}' cycle ended: {type(e).__name__}: {str(e)[:200]} — restarting child in 2s")
-                await asyncio.sleep(2)
+                # Backoff: at login the child's dependencies (a database, a network) may not be up yet.
+                delay = 2.0 if time.time() - t0 > 120 else min(delay * 2, 60.0)
+                log(f"gateway '{name}' cycle ended: {type(e).__name__}: {str(e)[:200]} — restarting child in {delay:.0f}s")
+                await asyncio.sleep(delay)
 
     asyncio.run(main())
     return 0
@@ -702,6 +787,7 @@ def build_spec(opts: dict, command: list[str]) -> dict:
     return {"name": name, "command": [resolved, *command[1:]], "resolved": bool(shutil.which(command[0])),
             "path": os.environ.get("PATH", ""), "cwd": opts.get("cwd") or os.getcwd(),
             "fingerprint": fingerprint([resolved, *command[1:]], Path(__file__).resolve()),
+            "serialize": bool(opts.get("serialize")),
             "env": {k: os.environ[k] for k in opts.get("env", []) if k in os.environ},
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
 
@@ -722,8 +808,8 @@ def main(argv: list[str]) -> int:
             log("connect needs the original command after `--`")
             return 2
         spec = build_spec(opts, rest)
-        if os.environ.get("SHARED_MCP_DISABLE") == "1":
-            exec_original(rest)
+        if os.environ.get("SHARED_MCP_DISABLE") == "1" or opts.get("per-session"):
+            exec_original(rest)                 # --per-session: uniform launcher, but this server must not be shared
         try:
             ensure(spec)
         except Exception as e:  # noqa: BLE001
