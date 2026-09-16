@@ -27,3 +27,27 @@ session's working directory should not be shared (the first session's cwd wins).
 
 Vendor into a plugin: `./vendor.sh <plugin-dir>...` (copies `shared_mcp.py`, stamps version).
 Tests: `python3 tests/test_shared.py`.
+
+## What it installs on a user's machine (disclosure)
+
+On first use for a given server, `connect` creates `~/.local/state/shared-mcp/venv` (a Python
+environment holding the `mcp` package), `~/.local/state/shared-mcp/<name>/` (spec.json at 0600 with
+the server's command and declared env vars, plus gateway.log), and a **login-time background
+service** — a launchd agent `com.shared-mcp.<name>` on macOS, a `systemd --user` unit on Linux, a
+detached process elsewhere — bound to 127.0.0.1 only. It prints a one-line notice to stderr the first
+time. Opt out with `SHARED_MCP_DISABLE=1`; remove with `shared_mcp.py stop --name <name>`.
+
+## Standards alignment (checked 2026-09-15)
+
+- MCP has no standard for a *shared* local server: stdio is specified as one subprocess per client,
+  Streamable HTTP for many clients. This kit converts the former into the latter on loopback — a common
+  community pattern (mcp-proxy, supergateway, Docker MCP Gateway), not a specified one.
+- Spec 2026-07-28 (SEP-2575/2567) removed the initialize handshake, protocol sessions and `ping`.
+  The bridge is correct in both generations: it only waits for / replays an `initialize` if the client
+  sent one, tracks a session id only if the server issued one, and forwards JSON-RPC errors carried on
+  4xx responses. The gateway's liveness probe is an ordinary RPC (`tools/list`), not `ping`.
+- Each gateway serves a Server Card (SEP-2127, in review) at `/.well-known/mcp/server-cards.json`
+  (alias `/.well-known/mcp.json`) so it can be discovered without connecting.
+- Roadmap item "HTTP over stdio" (Transports WG) would make the bridge a byte relay; the kit's
+  public shape (`connect`, `gateway`, state layout) is meant to survive that swap unchanged.
+

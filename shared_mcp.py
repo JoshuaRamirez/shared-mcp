@@ -38,7 +38,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -322,6 +322,11 @@ def ensure(spec: dict, wait: float = 60) -> dict:
         return running
     if running and not same:
         log(f"gateway '{name}' runs an older definition; restarting with the current one")
+    elif current is None:
+        log(f"first run for '{name}': installing a shared background service so every Claude session uses ONE "
+            f"copy of this server. It creates {STATE_ROOT}/venv and {state_dir(name)}, listens on 127.0.0.1:{port} only, "
+            f"and is kept alive by {'launchd' if IS_MAC else 'systemd --user' if (not IS_WIN and _systemd_user_available()) else 'a detached process'}. "
+            f"Opt out: SHARED_MCP_DISABLE=1, or `python3 {Path(__file__).name} stop --name {name}`.")
     else:
         log(f"starting gateway '{name}' on 127.0.0.1:{port}")
     ensure_venv()
@@ -346,7 +351,8 @@ class Bridge:
         self.sid: str | None = None
         self.init_params: dict | None = None
         self.out_lock, self.conn_lock = threading.Lock(), threading.Lock()
-        self.init_done = threading.Event()      # non-init messages wait for the session id
+        self.init_done = threading.Event()      # set once an initialize round-trip completes
+        self.init_inflight = False              # only then do pipelined messages wait for it
 
     def emit(self, obj: dict) -> None:
         with self.out_lock:
@@ -387,7 +393,13 @@ class Bridge:
                     parsed = json.loads(body)
                     msgs.extend(parsed if isinstance(parsed, list) else [parsed])
         else:
-            r.read()
+            body = r.read()
+            if ctype.startswith("application/json") and body.strip():
+                try:
+                    parsed = json.loads(body)
+                    msgs.extend(parsed if isinstance(parsed, list) else [parsed])
+                except ValueError:
+                    pass
         c.close()
         return r.status, headers, msgs
 
@@ -421,8 +433,11 @@ class Bridge:
         is_init = msg.get("method") == "initialize"
         if is_init:
             self.init_params = msg.get("params") or {}
-        elif self.sid is None:
+            self.init_inflight = True
+        elif self.init_inflight and not self.init_done.is_set():
             self.init_done.wait(60)              # a client may pipeline messages right after initialize
+        # A 2026-07-28 client never sends initialize and the server issues no session id;
+        # nothing above engages and every message is simply forwarded — stateless by default.
         for attempt in range(3):
             try:
                 status, headers, msgs = self.post(msg)
@@ -430,12 +445,17 @@ class Bridge:
                     raise ConnectionError("session terminated")
                 if status in (200, 202):
                     if is_init and status == 200:
-                        self.sid = headers.get("mcp-session-id")
+                        self.sid = headers.get("mcp-session-id")   # None for a sessionless server
                         self.init_done.set()
+                        self.init_inflight = False
                     for m in msgs:
                         self.emit(m)
                     return
-                if "id" in msg:
+                jsonrpc = [m for m in msgs if isinstance(m, dict) and m.get("jsonrpc") == "2.0"]
+                if jsonrpc:                       # e.g. a JSON-RPC error carried on a 4xx (2026-07-28 style)
+                    for m in jsonrpc:
+                        self.emit(m)
+                elif "id" in msg:
                     self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"gateway returned HTTP {status}"}})
                 return
             except (ConnectionError, OSError, http.client.HTTPException) as e:
@@ -533,11 +553,33 @@ def run_gateway(spec_path: str) -> int:
                         return [types.ReadResourceContents(content=getattr(c, "text", None) or getattr(c, "blob", ""), mime_type=c.mimeType) for c in res.contents]
 
                 mgr = StreamableHTTPSessionManager(app=srv, stateless=False)
+                try:
+                    tools_snapshot = [{"name": t.name, "description": t.description or ""} for t in (await up.list_tools()).tools] if caps.tools is not None else []
+                except Exception:  # noqa: BLE001
+                    tools_snapshot = []
 
                 async def health_ep(_req):
                     return JSONResponse({"name": name, "version": VERSION, "server": init.serverInfo.name,
                                          "uptime_s": int(time.time() - started), "child_restarts": child_info["restarts"],
                                          "spec": spec_path, "pid": os.getpid()})
+
+                async def server_card(_req):
+                    # MCP Server Card (SEP-2127, in review as of 2026-09): a description of the
+                    # server that can be read without connecting. Shape follows the registry
+                    # server.json schema the SEP builds on. Served at the SEP's path and a short alias.
+                    return JSONResponse({
+                        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+                        "name": f"local.shared-mcp/{name}",
+                        "title": init.serverInfo.name,
+                        "description": f"Shared local instance of the '{init.serverInfo.name}' MCP server, hosted by shared-mcp {VERSION} for every Claude Code session on this machine.",
+                        "version": getattr(init.serverInfo, "version", None) or "0",
+                        "supportedProtocolVersions": [init.protocolVersion],
+                        "remotes": [{"type": "streamable-http", "url": f"http://127.0.0.1:{port}/mcp"}],
+                        "capabilities": caps.model_dump(exclude_none=True),
+                        "tools": tools_snapshot,
+                        "_meta": {"local.shared-mcp": {"gateway_version": VERSION, "child_restarts": child_info["restarts"],
+                                                       "uptime_s": int(time.time() - started), "health": f"http://127.0.0.1:{port}/health"}},
+                    })
 
                 @contextlib.asynccontextmanager
                 async def lifespan(_app):
@@ -548,19 +590,24 @@ def run_gateway(spec_path: str) -> int:
                     async def __call__(self, scope, receive, send):
                         await mgr.handle_request(scope, receive, send)
 
-                app = Starlette(routes=[Route("/health", health_ep), Route("/mcp", _Mcp(), methods=["GET", "POST", "DELETE"])], lifespan=lifespan)
+                app = Starlette(routes=[Route("/health", health_ep),
+                                        Route("/.well-known/mcp/server-cards.json", server_card), Route("/.well-known/mcp.json", server_card),
+                                        Route("/mcp", _Mcp(), methods=["GET", "POST", "DELETE"])], lifespan=lifespan)
                 server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False))
                 log(f"gateway '{name}' serving {init.serverInfo.name} on http://127.0.0.1:{port}/mcp (child restarts: {child_info['restarts']})")
 
                 async def watchdog() -> None:
+                    # Liveness = "an ordinary RPC gets ANY reply". The 2026-07-28 spec removed
+                    # `ping`; tools/list exists in every generation, and an error reply still
+                    # proves the child is alive. Only silence / a broken pipe means dead.
                     from mcp.shared.exceptions import McpError
                     while not server.should_exit:
-                        await anyio.sleep(15)
+                        await anyio.sleep(30)
                         try:
-                            with anyio.fail_after(10):
-                                await up.send_ping()
+                            with anyio.fail_after(20):
+                                await up.list_tools()
                         except McpError:
-                            pass                # an error REPLY means the child is alive (some servers reject ping)
+                            pass
                         except Exception as e:  # noqa: BLE001
                             log(f"child server stopped answering ({type(e).__name__}); restarting it")
                             server.should_exit = True
