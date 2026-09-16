@@ -155,7 +155,8 @@ def pre(t): return f"<pre>{E(t.strip() or '(empty)')}</pre>"
 b_secs = [
 sec("s0","0","How to read this","Front matter", f"""
 <p>This is the single room for the shared-MCP work: the argument (§1–4: why one server per machine, seen from every concern), the artifacts (§5–9: each file and how it works inside), operating it (§10–12: machine state, undo, edge cases, day to day), and live evidence (§13). Everything marked <em>derived</em> was read from this machine when the page was generated ({E(stamp)}); the page regenerates on every commit to the kit and daily at 03:35, so it cannot describe a machine that no longer exists.</p>
-<p>Nouns: an <b>MCP server</b> exposes tools to Claude over the Model Context Protocol; <b>stdio</b> is the one-to-one pipe transport; a <b>gateway</b> runs one server and serves many clients over HTTP on loopback; a <b>bridge</b> is the per-session stdio-to-HTTP adapter; <b>launchd</b> is macOS's service manager; a <b>descriptor</b> is the small JSON file that tells <b>svc</b> what launchd cannot know about a service.</p>""")
+<p>The argument half combines the concerns raised while building this — distributed, user, experience, technical, infrastructural, functional, feature, exceptional, ecosystem, development, networking — into one account rather than eleven. The artifact half is the inventory that account rests on.</p>
+<p><b>Nouns used throughout.</b> An <b>MCP server</b> is a program that exposes tools to Claude over the Model Context Protocol. <b>stdio</b> means Claude talks to it through the process's own input and output pipes, which is one-to-one. A <b>gateway</b> is the process that runs one original server and serves it to many clients over HTTP on the loopback interface. A <b>bridge</b> is the small per-session program that speaks stdio to Claude and HTTP to a gateway. <b>launchd</b> is macOS's service manager. <b>svc</b> is the console built for this that lists and manages everything launchd runs for you; a <b>descriptor</b> is the small JSON file that tells svc what launchd cannot know about a service.</p>""")
 + fig(1,"Repositories, machine state, and the arrows between them. Everything under the bottom band was created by the artifacts above it and can be removed with the commands in §6.",FIG_MAP),
 sec("a1","5","The files","What exists, with size and line counts read from disk", f"""
 <table><thead><tr><th>artifact</th><th>lines</th><th>size</th><th>what it is</th><th>path</th></tr></thead><tbody>{''.join(frow(*f) for f in files)}</tbody></table>"""),
@@ -244,11 +245,32 @@ sec("a8","12","Operating it day to day","The five gestures", """
 sec("a9","13","Live evidence","Produced when this page was generated", f"""
 <p><b>{sessions}</b> Claude processes running; MCP-related processes: <b>{mem_n}</b>, holding <b>{mem_mb} MB</b> (130 processes / 5.8 GB before the conversion).</p>
 <table><thead><tr><th>gateway</th><th>state</th><th>port</th><th>health</th><th>bridges</th><th>purpose</th></tr></thead><tbody>{gw_rows()}</tbody></table>
+<p class="small">Derived live from svc and the process table. Health verdicts come from a live probe of each gateway's <code>/health</code> (or <code>/mcp</code> for spec-vault); "bridges" counts per-session bridge processes currently attached.</p>
 <h3>shared-mcp end-to-end test</h3>{pre(kit_test)}<h3>shared-mcp unit tests</h3>{pre(unit_test)}
 <h3>svc selftest</h3>{pre(svc_test)}
 <h3>svc list</h3>{pre(svc_list)}
 <h3>svc doctor</h3>{pre(svc_doc)}"""),
-sec("sref","R","Commits since 2026-09-13, per repository","Derived from git", "".join(f"<h4>{E(k)}</h4>{pre(v or '(none in range)')}" for k, v in commits.items())),
+sec("sref","R","Reference","Commands, paths, commits", """
+<h3>Daily commands</h3>
+<table><tbody>
+<tr><td><code>svc list</code> / <code>svc doctor</code> / <code>svc health</code></td><td>everything launchd runs for you; findings; probes</td></tr>
+<tr><td><code>svc show mcp-projam</code> · <code>svc logs mcp-projam</code></td><td>one service in full; its log</td></tr>
+<tr><td><code>svc restart mcp-projam --go</code></td><td>dry-run without <code>--go</code>; verifies the effect before claiming success</td></tr>
+<tr><td><code>svc prune</code> · <code>svc prune --go</code></td><td>preview / apply log retention (the daily agent does this at 03:30)</td></tr>
+<tr><td><code>python3 ~/Developer/shared-mcp/shared_mcp.py status|stop|ensure|logs --name X</code></td><td>the kit's own verbs</td></tr>
+<tr><td><code>SHARED_MCP_DISABLE=1</code></td><td>escape hatch: run a plugin's server per session again</td></tr>
+<tr><td><code>herdr server stop && herdr</code></td><td>restart every session so it picks up config changes</td></tr>
+</tbody></table>
+<h3>Paths</h3>
+<table><tbody>
+<tr><td><code>~/Developer/shared-mcp/</code></td><td>the kit, its tests, vendor script, this room (public: github.com/JoshuaRamirez/shared-mcp)</td></tr>
+<tr><td><code>~/.local/share/svc/</code></td><td>svc source, fixtures, MANIFESTO</td></tr>
+<tr><td><code>~/.config/svc/services.d/</code></td><td>one descriptor per service (purpose, source, health, manage)</td></tr>
+<tr><td><code>~/.local/state/shared-mcp/&lt;name&gt;/</code></td><td>spec.json (0600), gateway.log, spec-history.json</td></tr>
+<tr><td><code>~/.local/state/spec-vault/</code> · <code>~/.local/state/svc/</code></td><td>spec-vault venv, log, running-version; svc prune log</td></tr>
+<tr><td><code>~/Library/LaunchAgents/com.shared-mcp.*.plist</code>, <code>com.spec-vault.graph-server.plist</code>, <code>com.joshua.svc-prune.plist</code>, <code>com.joshua.shared-mcp-room.plist</code></td><td>the agents</td></tr>
+</tbody></table>
+<h3>Commits since 2026-09-13, per repository</h3>""" + "".join(f"<h4>{E(k)}</h4>{pre(v or '(none in range)')}" for k, v in commits.items())),
 ]
 p_secs = [
 sec("s1","1","The one sentence","The invariant everything else is a view of","""
@@ -284,7 +306,7 @@ nav = """<nav class="toc"><h1>Shared MCP</h1><p class="sub">One server per machi
 <div class="grp">The argument</div><ol><li><a href="#s2">2 · What a session sees</a></li><li><a href="#s3">3 · What the machine runs</a></li><li><a href="#s4">4 · How it spreads and evolves</a></li></ol>
 <div class="grp">The artifacts</div><ol><li><a href="#a1">5 · The files</a></li><li><a href="#a2">6 · The crash fix</a></li><li><a href="#a3">7 · spec-vault's own daemon</a></li><li><a href="#a4">8 · The shared-mcp kit</a></li><li><a href="#a5">9 · The svc console</a></li></ol>
 <div class="grp">Operating</div><ol><li><a href="#a6">10 · Machine state &amp; undo</a></li><li><a href="#a7">11 · Edge cases</a></li><li><a href="#a8">12 · Day to day</a></li></ol>
-<div class="grp">Evidence</div><ol><li><a href="#a9">13 · Live evidence</a></li><li><a href="#s6">14 · Open questions</a></li><li><a href="#sref">R · Commits per repo</a></li></ol></nav>"""
+<div class="grp">Evidence</div><ol><li><a href="#a9">13 · Live evidence</a></li><li><a href="#s6">14 · Open questions</a></li><li><a href="#sref">R · Commands, paths, commits</a></li></ol></nav>"""
 OUT.write_text(page("Shared MCP — One Server per Machine · Reading Room", "Personal infrastructure · reading room",
     "Shared MCP: one server per machine, shared by every Claude Code session",
     "The argument, the artifacts, how to operate them, and live evidence — in one page. How Claude Code's per-session MCP servers became shared, supervised, self-registering services; the crash that started it; the kit that makes sharing a plugin's default while staying safe on any machine; the console that keeps the daemons visible; and what remains open.",
