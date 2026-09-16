@@ -37,6 +37,8 @@ check("token=secret-xyz" in r1, "declared env var forwarded to the shared server
 check(len({x.split("pid=")[1].split()[0] for x in (r1,r2,r3)})==1, "same child pid for all calls")
 print(f"    bridge RSS: {rss_mb(a.pid):.0f} MB / {rss_mb(b.pid):.0f} MB")
 tl = rpc(a, {"jsonrpc":"2.0","id":13,"method":"tools/list"}); check([t["name"] for t in tl["result"]["tools"]]==["counter"], "tools/list forwarded")
+rr = rpc(a, {"jsonrpc":"2.0","id":16,"method":"resources/read","params":{"uri":"fixture://hello"}})
+check("result" in rr and rr["result"]["contents"][0].get("text")=="hello from the shared fixture", f"resources/read forwarded through the gateway: {str(rr)[:90]}")
 # gateway restart underneath live bridges
 spec = json.load(open(os.path.expanduser(f"~/.local/state/shared-mcp/{NAME}/spec.json")))
 h = shared_mcp.health(spec["port"]); os.kill(h["pid"], 15); time.sleep(1)

@@ -29,6 +29,7 @@ Registers with `svc` (~/.config/svc/services.d) when that console exists.
 """
 from __future__ import annotations
 
+import atexit
 import base64
 import hashlib
 import html as _html
@@ -46,7 +47,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -196,7 +197,7 @@ def start_mac(spec: dict) -> None:
     plist = HOME / "Library" / "LaunchAgents" / f"{lab}.plist"
     plist.parent.mkdir(parents=True, exist_ok=True)
     _launchctl("bootout", f"{domain}/{lab}")
-    for _ in range(20):                       # launchd holds a just-removed label briefly
+    for _ in range(120):                      # graceful shutdown may take a while (in-flight calls); wait up to 30 s
         if _launchctl("print", f"{domain}/{lab}")[0] != 0:
             break
         time.sleep(0.25)
@@ -222,11 +223,11 @@ def start_mac(spec: dict) -> None:
   </dict>
 </dict></plist>
 """)
-    for i in range(10):                       # bootstrap right after bootout can fail with EIO
+    for i in range(20):                       # bootstrap right after bootout can fail with EIO
         rc, out = _launchctl("bootstrap", domain, str(plist))
         if rc == 0:
             break
-        if i == 9:
+        if i == 19:
             raise RuntimeError(f"launchctl bootstrap failed: {out.strip()}")
         time.sleep(0.5)
     _launchctl("kickstart", "-k", f"{domain}/{lab}")
@@ -282,10 +283,25 @@ def start_detached(spec: dict) -> None:
     (state_dir(spec["name"]) / "gateway.pid").write_text(str(p.pid))
 
 
+def _pid_is_gateway(pid: int) -> bool:
+    """A pid file can go stale and the OS can reuse the number; only trust a pid whose
+    command line is one of our gateways."""
+    try:
+        if IS_WIN:
+            out = subprocess.run(["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"], capture_output=True, text=True).stdout
+        else:
+            out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+        return "shared_mcp.py" in out and "gateway" in out
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def stop_detached(name: str) -> None:
     pidf = state_dir(name) / "gateway.pid"
     try:
         pid = int(pidf.read_text())
+        if not _pid_is_gateway(pid):
+            raise ProcessLookupError(pid)
         if IS_WIN:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         else:
@@ -306,7 +322,7 @@ def service_alive(name: str) -> bool:
             return subprocess.run(["systemctl", "--user", "is-active", "--quiet", f"shared-mcp-{name}.service"]).returncode == 0
         pid = int((state_dir(name) / "gateway.pid").read_text())
         os.kill(pid, 0)
-        return True
+        return _pid_is_gateway(pid)
     except Exception:  # noqa: BLE001
         return False
 
@@ -365,6 +381,18 @@ def rotate_log(name: str) -> None:
         pass
 
 
+_HELD_LOCKS: set = set()
+
+
+def _release_held_locks() -> None:
+    for pth in list(_HELD_LOCKS):
+        try: Path(pth).rmdir()
+        except OSError: pass
+
+
+atexit.register(_release_held_locks)
+
+
 class _Lock:
     """mkdir lock so sessions restored in a batch do not race the bootstrap.
     Holders refresh the mtime between long steps (touch()); a lock idle for 10 minutes is
@@ -380,7 +408,7 @@ class _Lock:
         deadline = time.time() + self.wait_s
         while time.time() < deadline:
             try:
-                self.path.mkdir(); self.held = True; return self
+                self.path.mkdir(); self.held = True; _HELD_LOCKS.add(str(self.path)); return self
             except FileExistsError:
                 try:
                     if time.time() - self.path.stat().st_mtime > 600:
@@ -394,6 +422,7 @@ class _Lock:
         return self
     def __exit__(self, *a):
         if self.held:
+            _HELD_LOCKS.discard(str(self.path))
             try: self.path.rmdir()
             except OSError: pass
 
@@ -426,18 +455,23 @@ def _ensure_locked(spec: dict, wait: float, restart_ok: bool, lk: "_Lock") -> di
     """Make the gateway for spec run with THIS spec; returns its health card or raises."""
     name = spec["name"]
     current = load_spec(name)
+    if not restart_ok and current and Path(current.get("launcher", "")).exists():
+        # A reconnecting bridge revives with the NEWEST definition on disk, never its own
+        # possibly-stale one (an old session must not downgrade an upgrade). Port follows.
+        spec.clear(); spec.update(current)
     if current and current.get("port") and not spec.get("port_explicit"):
         spec["port"] = current["port"]                          # keep the port a running gateway already uses
+    if not Path(spec.get("launcher", "")).exists():
+        raise RuntimeError(f"launcher {spec.get('launcher')} no longer exists (plugin removed or upgraded); start a new session")
     running = gateway_ok(spec["port"], name)
     if not running and service_alive(name):
-        # Registered and alive but not answering yet: it is STARTING (child init, or in
-        # restart backoff). Wait for it rather than tearing down a gateway that is coming up.
-        running = wait_ok(spec["port"], name, wait)
+        # Registered and alive but not answering yet: STARTING (child init, restart backoff) —
+        # or stuck (port taken, uvicorn cannot bind). Give it a bounded grace, then treat as dead.
+        running = wait_ok(spec["port"], name, min(wait, 20))
     if not running:
         spec["port"] = free_port_near(spec["port"], name)      # hashed port held by a stranger? step forward
     port = spec["port"]
-    same = (current and current.get("command") == spec["command"] and current.get("env") == spec["env"]
-            and current.get("launcher") == spec["launcher"] and current.get("fingerprint") == spec.get("fingerprint"))
+    same = (current and all(current.get(k) == spec.get(k) for k in ("command", "env", "launcher", "fingerprint", "serialize", "cwd")))
     if running and same:
         return running
     if running and not restart_ok:
@@ -464,7 +498,16 @@ def _ensure_locked(spec: dict, wait: float, restart_ok: bool, lk: "_Lock") -> di
     ensure_venv(); lk.touch()
     rotate_log(name)
     save_spec(spec)
-    start_gateway(spec); lk.touch()
+    try:
+        start_gateway(spec); lk.touch()
+    except Exception as e:  # noqa: BLE001
+        # e.g. bootstrap raced a graceful shutdown; if a gateway is alive anyway, adopt it
+        # rather than falling back to a private copy that would fight the shared one.
+        h = wait_ok(port, name, 30)
+        if h:
+            log(f"start_gateway failed ({e}) but a gateway is answering; adopting it")
+            return h
+        raise
     write_svc_descriptor(spec)
     h = wait_ok(port, name, wait)
     if not h:
@@ -495,8 +538,11 @@ class Bridge:
             sys.stdout.buffer.write(json.dumps(obj, separators=(",", ":")).encode() + b"\n")
             sys.stdout.buffer.flush()
 
+    IDEMPOTENT = ("initialize", "tools/list", "prompts/list", "resources/list", "resources/templates/list", "resources/read", "prompts/get", "ping", "server/discover")
+    CALL_TIMEOUT = float(os.environ.get("SHARED_MCP_CALL_TIMEOUT", "3600"))
+
     def post(self, msg: dict) -> tuple[int, dict, list[dict]]:
-        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=600)
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=self.CALL_TIMEOUT)
         hdrs = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         if self.sid:
             hdrs["Mcp-Session-Id"] = self.sid
@@ -607,11 +653,18 @@ class Bridge:
                     self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"gateway returned HTTP {status}"}})
                 return
             except (ConnectionError, OSError, http.client.HTTPException, ValueError) as e:
-                if attempt == 2:
+                # Replay is safe only if the request cannot have executed: connection refused,
+                # or a terminated session (rejected before dispatch). A timeout or a reset
+                # mid-stream on a side-effecting call is reported, never replayed.
+                pre_dispatch = isinstance(e, ConnectionRefusedError) or "session terminated" in str(e)
+                idempotent = msg.get("method") in self.IDEMPOTENT or msg.get("method", "").startswith("notifications/")
+                if attempt == 2 or not (pre_dispatch or idempotent):
+                    self.reconnect() if not pre_dispatch else None
                     if is_init:
                         self.init_done.set(); self.init_inflight = False
                     if "id" in msg:
-                        self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"shared-mcp gateway unreachable: {e}"}})
+                        why = "gateway unreachable" if pre_dispatch else "connection lost mid-request; not replayed (the call may have run once)"
+                        self.emit({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"shared-mcp: {why}: {e}"}})
                     return
                 self.reconnect()
 
@@ -655,6 +708,7 @@ def run_gateway(spec_path: str) -> int:
     from mcp import ClientSession, types
     from mcp.client.stdio import StdioServerParameters, stdio_client
     from mcp.server import Server
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
@@ -678,7 +732,7 @@ def run_gateway(spec_path: str) -> int:
                 srv: Server = Server(init.serverInfo.name, instructions=init.instructions)
                 caps = init.capabilities
                 call_lock = anyio.Lock() if spec.get("serialize") else None
-                inflight = {"n": 0}
+                inflight = {"n": 0, "last_done": time.time()}
 
                 async def guarded(coro):
                     """Every upstream request goes through here: counts in-flight work (the watchdog
@@ -691,6 +745,7 @@ def run_gateway(spec_path: str) -> int:
                             return await coro
                     finally:
                         inflight["n"] -= 1
+                        inflight["last_done"] = time.time()
 
                 if caps.tools is not None:
                     @srv.list_tools()
@@ -719,9 +774,9 @@ def run_gateway(spec_path: str) -> int:
                         out = []
                         for c in res.contents:
                             if isinstance(c, types.BlobResourceContents):
-                                out.append(types.ReadResourceContents(content=base64.b64decode(c.blob), mime_type=c.mimeType))
+                                out.append(ReadResourceContents(content=base64.b64decode(c.blob), mime_type=c.mimeType))
                             else:
-                                out.append(types.ReadResourceContents(content=c.text, mime_type=c.mimeType))
+                                out.append(ReadResourceContents(content=c.text, mime_type=c.mimeType))
                         return out
 
                 mgr = StreamableHTTPSessionManager(app=srv, stateless=False)
@@ -776,8 +831,9 @@ def run_gateway(spec_path: str) -> int:
                     misses = 0
                     while not server.should_exit:
                         await anyio.sleep(30)
-                        if inflight["n"]:
-                            continue                        # busy child (a long sync tool) is not a dead child
+                        if inflight["n"] and time.time() - inflight["last_done"] < 600:
+                            continue                        # busy child (a long sync tool) is not a dead child —
+                                                            # but nothing completing for 10 min is, so probe anyway
                         try:
                             with anyio.fail_after(60):
                                 await up.list_tools()
@@ -807,6 +863,9 @@ def run_gateway(spec_path: str) -> int:
                 return                          # clean shutdown (signal)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 return
+            except SystemExit as e:                          # uvicorn could not bind: exit so the supervisor/ensure can move the port
+                log(f"gateway '{name}' exiting: {e} (port busy?)")
+                raise
             except BaseException as e:  # noqa: BLE001
                 # Backoff: at login the child's dependencies (a database, a network) may not be up yet.
                 if time.time() - t0 > 120:
@@ -874,7 +933,11 @@ def fingerprint(command: list[str], launcher: Path, cwd: str | None = None) -> s
 
 
 def build_spec(opts: dict, command: list[str]) -> dict:
-    name = opts.get("name") or Path(command[-1]).stem
+    name = opts.get("name")
+    if not name:                                  # derive something unique, not just a basename
+        stem = next((Path(a).stem for a in reversed(command) if not a.startswith("-")), "server")
+        name = f"{stem}-{zlib.crc32(' '.join(command).encode()):08x}"[:40]
+        log(f"no --name given; using '{name}' (give plugins an explicit --name)")
     # Resolve the executable NOW, with the session's PATH: the gateway runs under a
     # service manager whose PATH differs, and its own venv must never shadow `python3`.
     resolved = shutil.which(command[0])
@@ -887,8 +950,11 @@ def build_spec(opts: dict, command: list[str]) -> dict:
             "port": int(opts.get("port") or stable_port(name)), "launcher": str(Path(__file__).resolve()), "version": VERSION}
 
 
-def exec_original(command: list[str]) -> None:
+def exec_original(command: list[str], cwd: str | None = None) -> None:
     log(f"falling back to a plain per-session server: {' '.join(command)}")
+    if cwd:
+        try: os.chdir(cwd)
+        except OSError as e: log(f"could not chdir to {cwd}: {e}")
     if IS_WIN:
         sys.exit(subprocess.call(command))
     os.execvp(command[0], command)
@@ -903,13 +969,13 @@ def main(argv: list[str]) -> int:
             log("connect needs the original command after `--`")
             return 2
         if os.environ.get("SHARED_MCP_DISABLE") == "1" or opts.get("per-session"):
-            exec_original(rest)                 # --per-session: uniform launcher, but this server must not be shared
+            exec_original(rest, opts.get("cwd"))    # --per-session: uniform launcher, but this server must not be shared
         try:                                    # anything that fails before the bridge exists falls back to plain stdio
             spec = build_spec(opts, rest)
             ensure(spec)
         except Exception as e:  # noqa: BLE001
             log(f"cannot share {opts.get('name') or rest[-1]!r} on this machine: {e}")
-            exec_original(rest)
+            exec_original(rest, opts.get("cwd"))
         return Bridge(spec).run()
     name = opts.get("name")
     if not name:
