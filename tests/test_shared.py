@@ -39,12 +39,27 @@ print(f"    bridge RSS: {rss_mb(a.pid):.0f} MB / {rss_mb(b.pid):.0f} MB")
 tl = rpc(a, {"jsonrpc":"2.0","id":13,"method":"tools/list"}); check([t["name"] for t in tl["result"]["tools"]]==["counter"], "tools/list forwarded")
 rr = rpc(a, {"jsonrpc":"2.0","id":16,"method":"resources/read","params":{"uri":"fixture://hello"}})
 check("result" in rr and rr["result"]["contents"][0].get("text")=="hello from the shared fixture", f"resources/read forwarded through the gateway: {str(rr)[:90]}")
-# gateway restart underneath live bridges
+# permissions: nothing under the state root is readable by another local user
+import stat
+SD = os.path.expanduser(f"~/.local/state/shared-mcp/{NAME}")
+def mode(p): return stat.S_IMODE(os.stat(p).st_mode)
+def wide(): return sorted(f for f in os.listdir(SD) if os.path.isfile(os.path.join(SD, f)) and mode(os.path.join(SD, f)) & 0o077)
+check(mode(SD) == 0o700, f"state dir 0700 after a real launchd start (got {mode(SD):o})")
+check(not wide(), f"all files 0600 after a real launchd start (wide: {wide()})")
+hist = os.path.join(SD, "spec-history.json")
+check(not os.path.exists(hist) or "secret-xyz" not in open(hist).read(), "spec-history.json holds no forwarded secret")
+
+# gateway restart underneath live bridges — and the log is DELETED first, so the supervisor has to
+# re-create it: this is what a one-off chmod cannot fix and the job's own umask can.
 spec = json.load(open(os.path.expanduser(f"~/.local/state/shared-mcp/{NAME}/spec.json")))
+os.remove(os.path.join(SD, "gateway.log"))
 h = shared_mcp.health(spec["port"]); os.kill(h["pid"], 15); time.sleep(1)
 t0=time.time(); r4 = call(a, 14); print(f"    after gateway kill: {r4} ({time.time()-t0:.1f}s)")
 check(r4.startswith("1 "), "bridge reconnected to the restarted gateway (counter reset => new child) and replayed the call")
 check(call(b, 15).startswith("2 "), "second bridge also reconnected")
+lg = os.path.join(SD, "gateway.log")
+check(os.path.exists(lg) and mode(lg) == 0o600,
+      f"supervisor re-created a deleted gateway.log at 0600, not 0644 (got {mode(lg):o} )" if os.path.exists(lg) else "gateway.log not re-created")
 a.stdin.close(); b.stdin.close(); a.wait(10); b.wait(10); check(a.returncode==0 and b.returncode==0, "bridges exit 0 on stdin EOF")
 # in-place code change (same command path) must restart the gateway on the next connect
 fx = os.path.join(HERE, "fixture_server.py"); src = open(fx).read()

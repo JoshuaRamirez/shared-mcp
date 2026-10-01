@@ -70,4 +70,42 @@ check(calls["n"] == 3 and len(got) == 1, "tools/list + mid-request timeout: retr
 b2, calls, got = mk(ConnectionRefusedError("refused"))
 b2.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "t", "arguments": {}}})
 check(calls["n"] == 3 and len(got) == 1 and "unreachable" in got[0]["error"]["message"], "tools/call + connection refused (pre-dispatch): retried 3x, then 'unreachable' error")
+# --- 8. file modes: nothing this kit writes under the state root is readable by another local user,
+#        and the flap history never contains the value of a declared --env var
+import stat, pathlib as _pl
+SECRET = "tok-" + "A" * 24
+sp = {"name": "perm", "command": ["/bin/echo", "hi"], "env": {"MY_TOKEN": SECRET},
+      "fingerprint": "f0", "launcher": __file__, "port": 1, "cwd": "/tmp"}
+sd = k.state_dir("perm")
+def mode(p): return stat.S_IMODE(os.stat(p).st_mode)
+k.save_spec(sp)
+k._flapping("perm", sp)                      # writes spec-history.json
+k.ensure_log("perm")
+check(mode(sd) == 0o700, f"state dir is 0700 (got {mode(sd):o})")
+check(mode(k.STATE_ROOT) == 0o700, f"state root is 0700 (got {mode(k.STATE_ROOT):o})")
+wide = [f.name for f in sd.iterdir() if f.is_file() and mode(f) & 0o077]
+check(not wide, "every file in the state dir is 0600" + (f" — wide: {wide}" if wide else ""))
+hist = (sd / "spec-history.json").read_text()
+check(SECRET not in hist, "spec-history.json does not contain the forwarded secret (the key is hashed)")
+check(k._flapping("perm", sp) is False and k._flapping("perm", {**sp, "env": {"MY_TOKEN": "other"}}) is False,
+      "hashing the flap key keeps _flapping's comparison working")
+check(k._flapping("perm", sp) is True, "_flapping still detects two sessions disagreeing")
+# a file an older version left world-readable is repaired, not just left alone
+for f in sd.iterdir():
+    if f.is_file(): os.chmod(f, 0o644)
+os.chmod(sd, 0o755)
+k.harden_state("perm")
+check(mode(sd) == 0o700 and not [f for f in sd.iterdir() if f.is_file() and mode(f) & 0o077],
+      "harden_state repairs a directory and files left at 0755/0644")
+# secure_write never widens an existing file
+tmpf = sd / "probe.json"; tmpf.write_text("x"); os.chmod(tmpf, 0o666)
+k.secure_write(tmpf, "y")
+check(mode(tmpf) == 0o600, f"secure_write narrows a pre-existing 0666 file (got {mode(tmpf):o})")
+# the launchd job carries its own umask, in the decimal launchd actually reads
+if k.IS_MAC:
+    import re as _re
+    src = _pl.Path(os.path.join(HERE, "..", "shared_mcp.py")).read_text()
+    m = _re.search(r"<key>Umask</key><integer>(\d+)</integer>", src)
+    check(m and int(m.group(1)) == 0o077, f"launchd plist sets Umask to decimal 63 = 0o077 (got {m and m.group(1)})")
+
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
