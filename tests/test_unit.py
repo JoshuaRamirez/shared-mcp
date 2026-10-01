@@ -108,4 +108,22 @@ if k.IS_MAC:
     m = _re.search(r"<key>Umask</key><integer>(\d+)</integer>", src)
     check(m and int(m.group(1)) == 0o077, f"launchd plist sets Umask to decimal 63 = 0o077 (got {m and m.group(1)})")
 
+# --- 9. `ensure --name` must notice that the launcher or the server file changed on disk.
+#        The saved spec carries the fingerprint of what is ALREADY running, so comparing it with
+#        itself can never see an upgrade: refresh_fingerprint re-reads the bytes first.
+import shutil as _sh
+sd9 = k.state_dir("refresh")
+lau = sd9 / "launcher.py"; srv = sd9 / "server.py"
+lau.write_text("# launcher v1\n"); srv.write_text("# server v1\n")
+sp9 = {"name": "refresh", "command": ["python3", str(srv)], "env": {}, "cwd": str(sd9), "launcher": str(lau)}
+k.refresh_fingerprint(sp9); f_v1 = sp9["fingerprint"]
+check(bool(f_v1), "refresh_fingerprint produces a fingerprint from the launcher on disk")
+check(k.refresh_fingerprint(dict(sp9))["fingerprint"] == f_v1, "unchanged files => unchanged fingerprint (no spurious restart)")
+lau.write_text("# launcher v2 — vendored upgrade\n")
+check(k.refresh_fingerprint(dict(sp9))["fingerprint"] != f_v1, "upgraded launcher => new fingerprint, so ensure restarts")
+lau.write_text("# launcher v1\n"); srv.write_text("# server v2 — edited in place\n")
+check(k.refresh_fingerprint(dict(sp9))["fingerprint"] != f_v1, "edited server file => new fingerprint")
+gone = dict(sp9, launcher=str(sd9 / "not-here.py"), fingerprint="keep-me")
+check(k.refresh_fingerprint(gone)["fingerprint"] == "keep-me", "a launcher that no longer exists leaves the saved fingerprint alone")
+
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

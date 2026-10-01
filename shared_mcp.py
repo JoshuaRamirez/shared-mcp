@@ -994,6 +994,20 @@ def fingerprint(command: list[str], launcher: Path, cwd: str | None = None) -> s
     return h.hexdigest()[:16]
 
 
+def refresh_fingerprint(spec: dict) -> dict:
+    """`ensure --name` means "run with the CURRENT version on disk".
+
+    The saved spec's fingerprint is by definition the one that is already running, and
+    _ensure_locked compares the saved spec with itself, so an upgraded launcher or an edited
+    server file could never be noticed: the verb adopted the old gateway and reported success.
+    Recompute the content identity from the launcher path the spec already names — the path stays
+    the plugin's, only its bytes are re-read."""
+    lp = Path(spec.get("launcher", ""))
+    if lp.is_file():
+        spec["fingerprint"] = fingerprint(spec["command"], lp.resolve(), spec.get("cwd"))
+    return spec
+
+
 def build_spec(opts: dict, command: list[str]) -> dict:
     name = opts.get("name")
     if not name:                                  # derive something unique, not just a basename
@@ -1051,7 +1065,7 @@ def main(argv: list[str]) -> int:
         if not Path(spec["launcher"]).exists():
             log(f"launcher {spec['launcher']} no longer exists (plugin removed?); run `stop --name {name}`")
             return 1
-        h = ensure(spec)
+        h = ensure(refresh_fingerprint(spec))
         print(json.dumps(h, indent=2))
         return 0
     if verb == "status":
