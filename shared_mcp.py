@@ -107,8 +107,7 @@ def harden_state(name: str) -> None:
     _chmod(d, DIR_MODE)
     try:
         for f in d.iterdir():
-            if f.is_file():
-                _chmod(f, FILE_MODE)
+            _chmod(f, FILE_MODE if f.is_file() else DIR_MODE)   # ensure.lock is a directory
     except OSError:
         pass
 
@@ -465,7 +464,8 @@ class _Lock:
         deadline = time.time() + self.wait_s
         while time.time() < deadline:
             try:
-                self.path.mkdir(); self.held = True; _HELD_LOCKS.add(str(self.path)); return self
+                self.path.mkdir(mode=DIR_MODE); _chmod(self.path, DIR_MODE)   # inside a 0700 parent, but private on its own too
+                self.held = True; _HELD_LOCKS.add(str(self.path)); return self
             except FileExistsError:
                 try:
                     if time.time() - self.path.stat().st_mtime > 600:

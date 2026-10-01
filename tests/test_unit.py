@@ -97,6 +97,11 @@ os.chmod(sd, 0o755)
 k.harden_state("perm")
 check(mode(sd) == 0o700 and not [f for f in sd.iterdir() if f.is_file() and mode(f) & 0o077],
       "harden_state repairs a directory and files left at 0755/0644")
+with k._Lock(sd / "probe.lock") as _lk:                      # a lock directory is private too
+    check(mode(sd / "probe.lock") == 0o700, f"_Lock creates its directory 0700 (got {mode(sd / 'probe.lock'):o})")
+(sd / "sub.lock").mkdir(mode=0o755, exist_ok=True); os.chmod(sd / "sub.lock", 0o755)
+k.harden_state("perm")
+check(mode(sd / "sub.lock") == 0o700, "harden_state repairs sub-directories, not just files")
 # secure_write never widens an existing file
 tmpf = sd / "probe.json"; tmpf.write_text("x"); os.chmod(tmpf, 0o666)
 k.secure_write(tmpf, "y")
