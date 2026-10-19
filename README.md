@@ -26,7 +26,7 @@ Caveat: a shared server is machine-scoped. A server whose behaviour depends on t
 session's working directory should not be shared (the first session's cwd wins).
 
 Vendor into a plugin: `./vendor.sh <plugin-dir>...` (copies `shared_mcp.py`, stamps version).
-Tests: `python3 tests/test_shared.py` (end-to-end), `tests/test_unit.py` (bridge failure paths, lock), `tests/test_detached.py` (the no-service-manager supervision branch, forced on macOS).
+Tests: `python3 tests/test_shared.py` (end-to-end), `tests/test_child_restart.py` (the child dies under live bridges), `tests/test_unit.py` (bridge failure paths, lock), `tests/test_detached.py` (the no-service-manager supervision branch, forced on macOS).
 
 ## What it installs on a user's machine (disclosure)
 
@@ -47,8 +47,11 @@ operation, with the tests run live at generation. Regenerate with `reading-room/
 
 ## Edge cases
 
-Handled: gateway restart (bridge reconnects and replays); child death (gateway restarts it with
-backoff up to 60 s, for dependencies that come up late after login); gateway left down (bridge runs
+Handled: gateway restart (bridge reconnects and replays); child death (the first request that
+finds it gone restarts it at once, on the same port, which the gateway binds once for its life,
+each cycle in a fresh event loop; then backoff up to 60 s, for dependencies that come up late
+after login); gateway stopped (SIGTERM ends it cleanly and stops its child, so no orphan holds
+what the child held); gateway left down (bridge runs
 `ensure` after 10 s; the service manager restarts on crash); no daemon possible (original server runs
 per session); sessions cold-starting together (mkdir lock); sessions disagreeing about env or command
 (flap guard keeps the running definition and says so); in-place code updates (content fingerprint);
