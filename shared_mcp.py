@@ -49,7 +49,7 @@ import time
 import zlib
 from pathlib import Path
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 HOME = Path.home()
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
@@ -776,10 +776,38 @@ def run_gateway(spec_path: str) -> int:
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
+    import signal
+    import socket
+
     spec = json.loads(Path(spec_path).read_text())
     name, port = spec["name"], spec["port"]
     started = time.time()
     child_info: dict = {"pid": None, "restarts": -1}
+
+    # The gateway binds its port ONCE, for its whole life. Every cycle (a child restart) serves
+    # on a duplicate of this socket and closes only the duplicate, so a restart never has to
+    # rebind: it used to, and a listener left by a cancelled cycle made that fail with Errno 48
+    # and loop every 60 s. Connections that arrive between cycles wait in the backlog.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError as e:
+        listener.close()
+        log(f"gateway '{name}' exiting: cannot bind 127.0.0.1:{port}: {e} (port busy?)")
+        raise SystemExit(1)
+    listener.listen(2048)
+    listener.setblocking(False)
+
+    # SIGTERM / SIGINT (the supervisor stopping us) end the gateway cleanly, so the child's
+    # context exits and the child is terminated. Without this, uvicorn re-raised the signal
+    # with the default handler and the process died on the spot, leaving the child (started in
+    # its own session) orphaned and still holding whatever it holds.
+    stopping = {"now": False}
+    def _stop(_sig, _frame):
+        stopping["now"] = True
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
 
     async def serve_once() -> None:
         child_info["restarts"] += 1
@@ -795,16 +823,34 @@ def run_gateway(spec_path: str) -> int:
                 caps = init.capabilities
                 call_lock = anyio.Lock() if spec.get("serialize") else None
                 inflight = {"n": 0, "last_done": time.time()}
+                restart = {"wanted": False}
+                from mcp.shared.exceptions import McpError as _McpError
+                from mcp.types import CONNECTION_CLOSED
+
+                def child_gone(why: str) -> None:
+                    if not restart["wanted"]:
+                        log(f"child server gone ({why}); restarting it")
+                    restart["wanted"] = True
+                    server.should_exit = True
 
                 async def guarded(coro):
                     """Every upstream request goes through here: counts in-flight work (the watchdog
-                    stays quiet while the child is busy) and, with --serialize, one at a time."""
+                    stays quiet while the child is busy) and, with --serialize, one at a time. A
+                    request that finds the child gone restarts it at once, not at the watchdog's
+                    next probe."""
                     inflight["n"] += 1
                     try:
                         if call_lock is None:
                             return await coro
                         async with call_lock:
                             return await coro
+                    except (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream) as e:
+                        child_gone(type(e).__name__)
+                        raise
+                    except _McpError as e:
+                        if getattr(e.error, "code", None) == CONNECTION_CLOSED:
+                            child_gone("connection closed")
+                        raise
                     finally:
                         inflight["n"] -= 1
                         inflight["last_done"] = time.time()
@@ -882,7 +928,8 @@ def run_gateway(spec_path: str) -> int:
                 app = Starlette(routes=[Route("/health", health_ep),
                                         Route("/.well-known/mcp/server-cards.json", server_card), Route("/.well-known/mcp.json", server_card),
                                         Route("/mcp", _Mcp(), methods=["GET", "POST", "DELETE"])], lifespan=lifespan)
-                server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False))
+                server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False,
+                                                      timeout_graceful_shutdown=3))   # a restart never waits on a stream
                 log(f"gateway '{name}' serving {init.serverInfo.name} on http://127.0.0.1:{port}/mcp (child restarts: {child_info['restarts']})")
 
                 async def watchdog() -> None:
@@ -906,37 +953,70 @@ def run_gateway(spec_path: str) -> int:
                             misses += 1
                             if misses >= 2:                 # two consecutive silences (~3 min) before restart
                                 log(f"child server stopped answering ({type(e).__name__}) twice; restarting it")
+                                restart["wanted"] = True
                                 server.should_exit = True
                                 return
 
-                async with anyio.create_task_group() as tg:
-                    tg.start_soon(watchdog)
-                    await server.serve()
-                    tg.cancel_scope.cancel()
-                if server.should_exit:
+                async def stop_watch() -> None:
+                    while not server.should_exit:
+                        if stopping["now"]:
+                            server.should_exit = True
+                            return
+                        await anyio.sleep(0.2)
+
+                sock = listener.dup()                # uvicorn closes the sockets it is given
+                try:
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(watchdog)
+                        tg.start_soon(stop_watch)
+                        await server.serve(sockets=[sock])
+                        tg.cancel_scope.cancel()
+                finally:
+                    for srv_ in getattr(server, "servers", []):   # a cancelled cycle must not leave a listener
+                        srv_.close()
+                    try: sock.close()
+                    except OSError: pass
+                if stopping["now"]:
+                    return                          # clean shutdown: the child's context exits and stops it
+                if restart["wanted"] or server.should_exit:
                     raise RuntimeError("child restart requested")
 
-    async def main() -> None:
+    def main() -> None:
+        # Each cycle runs in its own event loop. A cycle that ends in an exception group (the
+        # child died under a live request) can leave cancellation state on its task; carried
+        # into the next cycle on the same loop, it cancelled the new session manager's tasks and
+        # every request came back unanswered ("ASGI callable returned without completing
+        # response"). A fresh loop per cycle carries nothing over but the listening socket.
         delay = 2.0
-        while True:
+        while not stopping["now"]:
             t0 = time.time()
             try:
-                await serve_once()
-                return                          # clean shutdown (signal)
-            except (KeyboardInterrupt, asyncio.CancelledError):
+                asyncio.run(serve_once())
+                if stopping["now"]:
+                    return                      # clean shutdown (signal)
+                raise RuntimeError("cycle ended")
+            except KeyboardInterrupt:
                 return
-            except SystemExit as e:                          # uvicorn could not bind: exit so the supervisor/ensure can move the port
+            except SystemExit as e:                          # cannot serve at all: exit so the supervisor/ensure can move the port
                 log(f"gateway '{name}' exiting: {e} (port busy?)")
                 raise
             except BaseException as e:  # noqa: BLE001
                 # Backoff: at login the child's dependencies (a database, a network) may not be up yet.
                 if time.time() - t0 > 120:
                     delay = 2.0                             # it ran a while: a fresh failure, start over
+                if stopping["now"]:
+                    return
                 log(f"gateway '{name}' cycle ended: {type(e).__name__}: {str(e)[:200]} — restarting child in {delay:.0f}s")
-                await asyncio.sleep(delay)
+                for _ in range(int(delay * 5)):
+                    if stopping["now"]:
+                        return
+                    time.sleep(0.2)
                 delay = min(delay * 2, 60.0)
 
-    asyncio.run(main())
+    try:
+        main()
+    finally:
+        listener.close()
     return 0
 
 
