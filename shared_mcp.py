@@ -51,6 +51,23 @@ from pathlib import Path
 
 VERSION = "0.3.3"
 HOME = Path.home()
+# The gateway's own variables a child server gets beyond what its plugin named (--env): who and where
+# the user is, the language and the temp folder. Nothing else of the gateway's environment.
+CHILD_ENV_NAMES = frozenset({"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TZ", "LANG", "LC_ALL",
+                             "LC_CTYPE", "__CF_USER_TEXT_ENCODING", "SHARED_MCP_STATE"})
+
+
+def build_child_env(spec: dict, environ) -> dict:
+    """The child server's environment, built, not inherited (his rule, 26 Nov 2026: start child programs
+    clean, nothing inherited unless named): CHILD_ENV_NAMES from the gateway, then what the plugin named
+    with --env (recorded in the spec), then the session's PATH."""
+    env = {k: v for k, v in environ.items() if k in CHILD_ENV_NAMES}
+    env.update(spec.get("env", {}))
+    if spec.get("path"):
+        env["PATH"] = spec["path"]
+    return env
+
+
 STATE_ROOT = Path(os.environ.get("SHARED_MCP_STATE") or
                   (Path(os.environ["LOCALAPPDATA"]) / "shared-mcp" if os.name == "nt" and os.environ.get("LOCALAPPDATA")
                    else HOME / ".local" / "state" / "shared-mcp"))
@@ -811,9 +828,7 @@ def run_gateway(spec_path: str) -> int:
 
     async def serve_once() -> None:
         child_info["restarts"] += 1
-        child_env = {**os.environ, **spec.get("env", {})}
-        if spec.get("path"):
-            child_env["PATH"] = spec["path"]
+        child_env = build_child_env(spec, os.environ)
         exe = spec.get("resolved_exe") or spec["command"][0]
         params = StdioServerParameters(command=exe, args=spec["command"][1:], env=child_env, cwd=spec.get("cwd") or None)
         async with stdio_client(params, errlog=sys.stderr) as (read, write):
