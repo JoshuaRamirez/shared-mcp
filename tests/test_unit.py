@@ -131,4 +131,11 @@ check(k.refresh_fingerprint(dict(sp9))["fingerprint"] != f_v1, "edited server fi
 gone = dict(sp9, launcher=str(sd9 / "not-here.py"), fingerprint="keep-me")
 check(k.refresh_fingerprint(gone)["fingerprint"] == "keep-me", "a launcher that no longer exists leaves the saved fingerprint alone")
 
+# --- 5. a child server starts clean: only the few names, what its plugin named (--env), the session PATH
+gw_env = {"HOME": "/h", "USER": "u", "CLAUDE_CODE_SESSION_ID": "s1", "GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+          "CG_FOLLOW_FROM_LSN": "9", "PATH": "/gateway/bin"}
+ce = k.build_child_env({"env": {"PROJAM_DB": "/db"}, "path": "/session/bin"}, gw_env)
+check(ce == {"HOME": "/h", "USER": "u", "PROJAM_DB": "/db", "PATH": "/session/bin"},
+      f"child env is built, not inherited: {sorted(ce)}")
+
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

@@ -38,6 +38,9 @@ for label, path, spec in [("shared-mcp (public)", H/"Developer/shared-mcp", ".")
                           ("ClaudeCodeMarketplace", H/"Developer/AspenESS/ClaudeCodeMarketplace", "plugins/spec-vault plugins/ado-backlog-sync .claude-plugin/marketplace.json"),
                           ("advanced-prompting-engine", H/"Developer/advanced-prompting-engine", "shared_mcp.py .mcp.json README.md"),
                           ("claude-code-profile (prompt-library)", H/".claude/skills/prompt-library", "shared_mcp.py .mcp.json README.md")]:
+    if not path.exists():   # a copy that has moved or gone is said, not a crash of the whole room (and the commit hook)
+        commits[label] = "(folder not present)"
+        continue
     # exclude the room's own refresh commits so a daily refresh cannot feed itself a new diff
     commits[label] = sh(f"git log --since=2026-09-13 --invert-grep --grep='^room' --format='%h %ad %s' --date=short -- {spec}", cwd=path).strip()
 files = [
